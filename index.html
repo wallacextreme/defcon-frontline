@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#050a0f" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <title>DEFCON: Frontline — C4ISR Tactical Tower Defense</title>
+    <script type="module" crossorigin src="./assets/index-BOM_rLzr.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DSmdYIO6.css">
+  </head>
+  <body>
+    <div id="app">
+      <!-- TOP C4ISR TELEMETRY BAR -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <div>
+            <div class="brand-title">DEFCON: FRONTLINE</div>
+            <div class="brand-sub" id="hud-mission-label">MUNDO 1 // FASE 1-1</div>
+          </div>
+        </div>
+
+        <div class="telemetry-group">
+          <div class="metric">
+            <span class="metric-label">FASE ($)</span>
+            <span class="metric-value text-green" id="hud-budget">$750</span>
+          </div>
+          <div class="metric metric-wb" title="Créditos de Comando Permanentes usados no Arsenal Pré-Fase">
+            <span class="metric-label">🎖️ WAR BONDS</span>
+            <span class="metric-value text-amber" id="hud-wb">250 WB$</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">FOB HQ</span>
+            <span class="metric-value text-cyan" id="hud-fob">20 / 20</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">ONDA</span>
+            <span class="metric-value" id="hud-wave">0 / 10</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">HOSTIS</span>
+            <span class="metric-value text-amber" id="hud-enemies">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">ABATES</span>
+            <span class="metric-value" id="hud-kills">0</span>
+          </div>
+          <div class="aesa-badge" id="hud-aesa" title="Patriot Nv2 AN/MPQ-65 AESA revela Stealth no mapa inteiro">
+            AESA OFF
+          </div>
+          <div class="coord-badge" id="hud-coord">GRID --</div>
+        </div>
+
+        <div class="controls-group">
+          <button class="btn-install-pwa hidden" id="btn-install-pwa" title="Instalar App no Celular / PC">
+            📲 INSTALAR APP
+          </button>
+          <button class="btn-save-pill" id="btn-save-menu" title="Autosave ativo (Navegador e App Windows .exe/.msi). Clique para Slots & Backup">
+            💾 SALVO
+          </button>
+          <button class="btn-campaign" id="btn-campaign" title="Abrir Mapa de Mundos, Fases e Arsenal Permanente">
+            🗺️ MAPA DE MUNDOS &amp; ARSENAL
+          </button>
+          <div class="speed-group">
+            <button class="btn-speed" data-speed="0" title="Pausa Tática [Space]">❚❚</button>
+            <button class="btn-speed active" data-speed="1">1X</button>
+            <button class="btn-speed" data-speed="2">2X</button>
+            <button class="btn-speed" data-speed="3">3X</button>
+          </div>
+          <button class="btn-wave" id="btn-wave">INICIAR ONDA 1</button>
+          <button class="btn-icon" id="btn-reset-cam" title="Centralizar Câmera 3D">🎯</button>
+          <button class="btn-icon btn-mobile-sidebar" id="btn-toggle-sidebar" title="Abrir Painel Tático / Inspetor">📡</button>
+          <button class="btn-icon" id="btn-mute" title="Ativar/Silenciar Áudio">🔊</button>
+          <button class="btn-icon" id="btn-help" title="Manual Tático">?</button>
+        </div>
+      </header>
+
+      <!-- MAIN WORKSPACE: THREE.JS 3D VIEWPORT + TACTICAL SIDEBAR -->
+      <main class="workspace">
+        <section class="viewport-wrap">
+          <div id="game-container"></div>
+          <div class="tool-banner hidden" id="tool-banner">
+            <span id="tool-banner-text"></span>
+            <div class="tool-banner-actions">
+              <button class="btn-tool-action hidden" id="btn-rotate-a10" type="button">🔄 GIRAR [R]</button>
+              <button class="btn-tool-cancel" id="btn-cancel-tool" type="button">✕ CANCELAR</button>
+            </div>
+          </div>
+          <div class="radar-alert hidden" id="radar-alert-banner"></div>
+        </section>
+
+        <div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
+
+        <aside class="sidebar" id="tactical-sidebar">
+          <div class="sidebar-mobile-head">
+            <span>PAINEL C4ISR &amp; INSPETOR</span>
+            <button class="btn-close-drawer" id="btn-close-sidebar" type="button" title="Fechar Painel">✕ FECHAR</button>
+          </div>
+          <!-- NEXT WAVE INTEL -->
+          <div class="panel">
+            <div class="panel-header">
+              <span>INTEL // PRÓXIMA ONDA</span>
+              <span class="panel-tag" id="next-wave-num">ONDA 1</span>
+            </div>
+            <div class="wave-title" id="next-wave-title">Vanguarda de Reconhecimento</div>
+            <div class="wave-brief" id="next-wave-brief"></div>
+            <div class="wave-units" id="next-wave-units"></div>
+          </div>
+
+          <!-- SELECTED TOWER INSPECTOR -->
+          <div class="panel inspector-panel" id="inspector-panel">
+            <div class="panel-header">
+              <span>INSPETOR DE UNIDADE</span>
+              <span class="panel-tag" id="insp-level">SELECIONE UMA TORRE</span>
+            </div>
+            <div id="inspector-empty" class="inspector-empty">
+              Clique em uma torre no mapa para inspecionar integridade (HP), alterar prioridade, reparar [R], fazer upgrade ou vender (75%).
+            </div>
+            <div id="inspector-body" class="hidden">
+              <div class="insp-head">
+                <div>
+                  <div class="insp-name" id="insp-name"></div>
+                  <div class="insp-role" id="insp-role"></div>
+                </div>
+                <div class="insp-stats-mini">
+                  <div>DANO: <strong id="insp-total-dmg">0</strong></div>
+                  <div>ABATES: <strong id="insp-kills">0</strong></div>
+                </div>
+              </div>
+
+              <div class="insp-hp-box">
+                <div class="insp-hp-top">
+                  <span>INTEGRIDADE ESTRUTURAL</span>
+                  <strong id="insp-hp-text">450 / 450</strong>
+                </div>
+                <div class="insp-hp-track">
+                  <div class="insp-hp-fill" id="insp-hp-fill"></div>
+                </div>
+              </div>
+
+              <div class="insp-specs" id="insp-specs"></div>
+
+              <div class="prio-section" id="prio-section">
+                <div class="sub-label">PRIORIDADE DE ALVO</div>
+                <div class="prio-grid" id="prio-grid"></div>
+              </div>
+
+              <div class="insp-actions">
+                <button class="btn-repair" id="btn-repair">🔧 REPARAR DEFESA ($0) [R]</button>
+                <button class="btn-upgrade" id="btn-upgrade">
+                  <span id="btn-upgrade-title">UPGRADE</span>
+                  <small id="btn-upgrade-desc"></small>
+                </button>
+                <button class="btn-sell" id="btn-sell">VENDER (+$0)</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- RADIO C4ISR FEED -->
+          <div class="panel radio-panel">
+            <div class="panel-header">
+              <span>COMMS // RÁDIO TÁTICO</span>
+              <span class="panel-tag">LIVE</span>
+            </div>
+            <div class="radio-log" id="radio-log"></div>
+          </div>
+        </aside>
+      </main>
+
+      <!-- BOTTOM BUILD ARSENAL & AIR SUPPORT DOCK -->
+      <footer class="dock">
+        <div class="arsenal-grid" id="arsenal-grid"></div>
+        <div class="dock-divider"></div>
+        <div class="support-grid">
+          <button class="support-card" id="btn-a10" data-support="a10">
+            <div class="sup-top">
+              <span class="hotkey">Q</span>
+              <span class="sup-name">A-10 WARTHOG</span>
+              <span class="sup-cost">$200</span>
+            </div>
+            <div class="sup-desc">GAU-8 30mm Strafe (Arraste/R roda ângulo)</div>
+            <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-a10"></div></div>
+            <div class="sup-cd-text" id="txt-cd-a10">PRONTO</div>
+          </button>
+          <button class="support-card" id="btn-hellfire" data-support="hellfire">
+            <div class="sup-top">
+              <span class="hotkey">E</span>
+              <span class="sup-name">AGM-114 HELLFIRE</span>
+              <span class="sup-cost">$150</span>
+            </div>
+            <div class="sup-desc">Ataque cirúrgico antitanque no cursor</div>
+            <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-hellfire"></div></div>
+            <div class="sup-cd-text" id="txt-cd-hellfire">PRONTO</div>
+          </button>
+          <button class="support-card" id="btn-b52" data-support="b52">
+            <div class="sup-top">
+              <span class="hotkey">B</span>
+              <span class="sup-name">B-52 CARPET</span>
+              <span class="sup-cost" id="cost-b52">$350</span>
+            </div>
+            <div class="sup-desc">Tapete de bombas + zonas de fogo</div>
+            <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-b52"></div></div>
+            <div class="sup-cd-text" id="txt-cd-b52">PRONTO</div>
+          </button>
+        </div>
+      </footer>
+    </div>
+
+    <!-- CAMPAIGN WORLDS & PRE-MISSION ARSENAL MODAL -->
+    <div class="modal hidden" id="campaign-modal">
+      <div class="modal-card modal-campaign">
+        <div class="camp-header">
+          <div>
+            <div class="modal-badge">COMANDO ESTRATÉGICO // PROGRESSÃO PERMANENTE</div>
+            <h2>MAPA DE MUNDOS &amp; ARSENAL TÁTICO</h2>
+          </div>
+          <div class="camp-header-right">
+            <div class="wb-pill">🎖️ CRÉDITOS: <strong id="camp-wb-balance">250 WB$</strong></div>
+            <button class="btn-icon" id="btn-close-campaign" title="Fechar">✕</button>
+          </div>
+        </div>
+
+        <div class="camp-tabs">
+          <button class="camp-tab active" data-tab="worlds">🌍 MAPA DE MUNDOS &amp; FASES (3x5)</button>
+          <button class="camp-tab" data-tab="arsenal">🔧 ARSENAL &amp; ENGENHARIA (WB$)</button>
+          <button class="camp-tab" data-tab="save">💾 SALVAR / SLOTS &amp; BACKUP</button>
+        </div>
+
+        <!-- TAB 1: WORLDS & STAGES -->
+        <div class="camp-body" id="tab-worlds">
+          <div class="worlds-selector" id="worlds-selector"></div>
+          <div class="world-desc-bar" id="world-desc-bar"></div>
+          <div class="stages-grid" id="stages-grid"></div>
+        </div>
+
+        <!-- TAB 2: ARSENAL & TECH TREE -->
+        <div class="camp-body hidden" id="tab-arsenal">
+          <div class="arsenal-section-label">SUPORTE AÉREO ESTRATÉGICO</div>
+          <div class="shop-support-grid" id="shop-support-grid"></div>
+          <div class="arsenal-section-label">ARMAS DE DEFESA &amp; ENGENHARIA PERMANENTE (NV 0 → 5)</div>
+          <div class="shop-towers-grid" id="shop-towers-grid"></div>
+        </div>
+
+        <!-- TAB 3: AUTOSAVE, MANUAL SLOTS & PORTABLE BACKUP -->
+        <div class="camp-body hidden" id="tab-save">
+          <div class="save-section-card">
+            <div class="save-sec-head">
+              <div>
+                <strong>AUTOSAVE AUTOMÁTICO (LOCALSTORAGE + INDEXEDDB)</strong>
+                <div class="save-sec-sub" id="autosave-status-text">Carregando estado de salvamento...</div>
+              </div>
+              <div class="save-sec-actions">
+                <button class="btn-launch" id="btn-force-save">💾 SALVAR AGORA</button>
+                <button class="btn-secondary" id="btn-reset-mission">🔄 RECOMEÇAR FASE</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="arsenal-section-label">SLOTS DE SAVE MANUAL (CAMPANHA + BATALHA EM ANDAMENTO)</div>
+          <div class="save-slots-grid" id="save-slots-grid"></div>
+
+          <div class="arsenal-section-label">PORTABILIDADE ENTRE NAVEGADOR E INSTALADOR WINDOWS (.EXE / .MSI)</div>
+          <div class="save-backup-row">
+            <div class="save-backup-desc">
+              Exporte todo o seu progresso (Mundos, War Bonds, Armas, Tech Tree, Torres e Onda atual) para um arquivo <code>.json</code> ou importe de volta ao instalar/atualizar o app no Windows.
+            </div>
+            <div class="save-sec-actions">
+              <button class="btn-primary" id="btn-export-save" style="width:auto">📥 EXPORTAR SAVE (.JSON)</button>
+              <button class="btn-secondary" id="btn-import-save">📤 IMPORTAR SAVE (.JSON)</button>
+              <input type="file" id="input-import-save" accept=".json,application/json" class="hidden" />
+            </div>
+          </div>
+
+          <div class="save-section-card pwa-install-card">
+            <div class="save-sec-head">
+              <div>
+                <strong>APLICATIVO OFFLINE / PWA (ANDROID, IOS &amp; DESKTOP)</strong>
+                <div class="save-sec-sub" id="pwa-install-hint">
+                  Instale na tela inicial para jogar em tela cheia e offline. No Android Chrome: toque no menu (⋮) → "Instalar aplicativo". No iPhone Safari: Compartilhar → "Adicionar à Tela de Início".
+                </div>
+              </div>
+              <div class="save-sec-actions">
+                <button class="btn-install-pwa" id="btn-modal-install-pwa" type="button">📲 INSTALAR APP (PWA)</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="camp-footer">
+          <div class="camp-footer-tools">
+            <button class="btn-secondary" id="btn-unlock-all-stages" title="Libera todas as 15 fases dos 3 mundos para jogar/testar imediatamente">
+              🔓 LIBERAR TODAS AS FASES
+            </button>
+            <button class="btn-secondary" id="btn-grant-wb" title="Adiciona +1.000 WB$ de suprimento de comando">
+              🪙 +1.000 WB$
+            </button>
+          </div>
+          <button class="btn-launch" id="btn-launch-stage">🚀 INICIAR OPERAÇÃO (FASE 1-1)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- GAME OVER / VICTORY MODAL -->
+    <div class="modal hidden" id="gameover-modal">
+      <div class="modal-card">
+        <div class="modal-badge" id="go-badge">MISSION STATUS</div>
+        <h2 id="go-title">DEFCON RESULT</h2>
+        <p id="go-desc"></p>
+        <div class="go-stats">
+          <div><span>ONDA ALCANÇADA</span><strong id="go-wave">0 / 10</strong></div>
+          <div><span>UNIDADES ABATIDAS</span><strong id="go-kills">0</strong></div>
+          <div><span>WAR BONDS GANHOS</span><strong id="go-wb" style="color:#facc15">+0 WB$</strong></div>
+        </div>
+        <div class="go-actions">
+          <button class="btn-primary" id="btn-restart">🔄 JOGAR NOVAMENTE (FARMAR WB$)</button>
+          <button class="btn-secondary" id="btn-go-campaign">🗺️ MAPA DE MUNDOS &amp; ARSENAL</button>
+          <button class="btn-launch hidden" id="btn-next-stage">⏭️ PRÓXIMA FASE</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TACTICAL HELP MODAL -->
+    <div class="modal hidden" id="help-modal">
+      <div class="modal-card modal-wide">
+        <div class="modal-badge">MANUAL DE DOUTRINA OTAN</div>
+        <h2>DEFCON: FRONTLINE — GUIA TÁTICO</h2>
+        <ul class="manual-list">
+          <li><strong>Grid Expandido (28x16) &amp; Labirinto A*:</strong> Use <em>Barreiras Hesco ($25)</em> ou torres para alongar o corredor até a FOB.</li>
+          <li><strong>Dupla Economia:</strong> <strong>Orçamento ($)</strong> é usado apenas na fase atual para construir, reparar e chamar suporte. <strong>War Bonds (🎖️ WB$)</strong> são permanentes e compram novas armas e melhorias na tela <em>MAPA DE MUNDOS &amp; ARSENAL</em>!</li>
+          <li><strong>Chefes Atacam Torres:</strong> Sub-Chefes, Chefes de Fase e Chefes Supremos disparam contra suas defesas! Use <code>[R]</code> para reparar, posicione <em>Casamata Abrams</em> para atrair fogo ou <em>Iron Dome Tamir</em> para interceptar mísseis e curar torres (+25 HP/s).</li>
+          <li><strong>Novas Armas:</strong> <em>HELIOS Laser</em> derrete chefes ignorando APS/ERA (+200% dano contínuo). <em>TOS-1A MLRS</em> cria zonas de fogo persistentes no chão.</li>
+          <li><strong>Câmera Tática 3D:</strong> Arraste <code>Botão Esquerdo</code> para orbitar, <code>Botão Direito</code> ou <code>WASD</code> para mover, <code>Scroll</code> para zoom.</li>
+          <li><strong>Atalhos:</strong> <code>[1-9, 0, -, =]</code> Construir | <code>[Q]</code> A-10 | <code>[E]</code> Hellfire | <code>[B]</code> B-52 | <code>[R]</code> Reparar torre | <code>[Space]</code> Pausa | <code>[Shift+Click]</code> Contínuo.</li>
+        </ul>
+        <button class="btn-primary" id="btn-close-help">RETORNAR AO COMANDO</button>
+      </div>
+    </div>
+
+  </body>
+</html>
