@@ -61,6 +61,7 @@ export class HudController {
       btnToggleSidebar: document.getElementById('btn-toggle-sidebar'),
       btnCloseSidebar: document.getElementById('btn-close-sidebar'),
       tacticalSidebar: document.getElementById('tactical-sidebar'),
+      sidebarBackdrop: document.getElementById('sidebar-backdrop'),
       inspectorPanel: document.getElementById('inspector-panel'),
       btnMute: document.getElementById('btn-mute'),
       btnHelp: document.getElementById('btn-help'),
@@ -297,10 +298,15 @@ export class HudController {
     this.el.btnWave.addEventListener('click', () => bus.emit('cmd:startWave'));
     this.el.btnResetCam?.addEventListener('click', () => bus.emit('cmd:resetCamera'));
     this.el.btnToggleSidebar?.addEventListener('click', () => {
-      this.el.tacticalSidebar?.classList.toggle('sidebar-open');
+      const isOpen = this.el.tacticalSidebar?.classList.contains('sidebar-open');
+      this.setMobileSidebarOpen(!isOpen);
     });
-    this.el.btnCloseSidebar?.addEventListener('click', () => {
-      this.el.tacticalSidebar?.classList.remove('sidebar-open');
+    this.el.btnCloseSidebar?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setMobileSidebarOpen(false);
+    });
+    this.el.sidebarBackdrop?.addEventListener('click', () => {
+      this.setMobileSidebarOpen(false);
     });
     this.el.btnRotateA10?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -403,6 +409,12 @@ export class HudController {
     bus.on('hud:speed', (speed) => this.renderSpeed(speed));
     bus.on('hud:tool', (tool) => this.renderActiveTool(tool));
     bus.on('hud:selectedTower', (tower) => this.renderInspector(tower));
+    bus.on('hud:openMobileInspector', () => {
+      if (window.innerWidth <= 1024) {
+        this.setMobileSidebarOpen(true);
+        this.el.inspectorPanel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
     bus.on('hud:radio', (msg) => this.appendRadio(msg));
     bus.on('hud:alert', (alert) => this.showRadarAlert(alert));
     bus.on('hud:openArsenal', () => this.openCampaignModal('arsenal'));
@@ -868,9 +880,7 @@ export class HudController {
       this.el.btnRotateA10?.classList.add('hidden');
       return;
     }
-    if (window.innerWidth <= 1024) {
-      this.el.tacticalSidebar?.classList.remove('sidebar-open');
-    }
+    this.setMobileSidebarOpen(false);
     this.el.toolBanner.classList.remove('hidden');
     const targetTextEl = this.el.toolBannerText || this.el.toolBanner;
     const isA10 = tool.kind === 'support' && tool.supportId === 'a10';
@@ -889,6 +899,12 @@ export class HudController {
     }
   }
 
+  setMobileSidebarOpen(open) {
+    const shouldOpen = Boolean(open) && window.innerWidth <= 1024;
+    this.el.tacticalSidebar?.classList.toggle('sidebar-open', shouldOpen);
+    this.el.sidebarBackdrop?.classList.toggle('hidden', !shouldOpen);
+  }
+
   renderInspector(tower) {
     this.selectedTower = tower;
     if (!tower) {
@@ -896,11 +912,6 @@ export class HudController {
       this.el.inspEmpty.classList.remove('hidden');
       this.el.inspBody.classList.add('hidden');
       return;
-    }
-
-    if (window.innerWidth <= 1024) {
-      this.el.tacticalSidebar?.classList.add('sidebar-open');
-      this.el.inspectorPanel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     this.el.inspEmpty.classList.add('hidden');

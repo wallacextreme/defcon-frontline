@@ -939,6 +939,7 @@ export class Battlefield3D {
 
       if (this.pathfinder.inBounds(col, row) && this.towerGrid[row][col]) {
         this.selectTower(this.towerGrid[row][col]);
+        bus.emit('hud:openMobileInspector');
         audio.playUi('click');
       } else {
         this.selectTower(null);
