@@ -14,8 +14,8 @@
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
     <title>DEFCON: Frontline — C4ISR Tactical Tower Defense</title>
-    <script type="module" crossorigin src="./assets/index-BOM_rLzr.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DSmdYIO6.css">
+    <script type="module" crossorigin src="./assets/index-N6qlDF6M.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Bu_e3_Bw.css">
   </head>
   <body>
     <div id="app">
@@ -54,6 +54,10 @@
             <span class="metric-label">ABATES</span>
             <span class="metric-value" id="hud-kills">0</span>
           </div>
+          <div class="metric">
+            <span class="metric-label">TORRES</span>
+            <span class="metric-value" id="hud-towers-count">0 / 30</span>
+          </div>
           <div class="aesa-badge" id="hud-aesa" title="Patriot Nv2 AN/MPQ-65 AESA revela Stealth no mapa inteiro">
             AESA OFF
           </div>
@@ -67,6 +71,9 @@
           <button class="btn-save-pill" id="btn-save-menu" title="Autosave ativo (Navegador e App Windows .exe/.msi). Clique para Slots & Backup">
             💾 SALVO
           </button>
+          <button class="btn-coop" id="btn-coop" title="Lobby Co-op 1–4 Jogadores (WebRTC PeerJS + Aba Local)">
+            🌐 CO-OP SQUAD (1-4P)
+          </button>
           <button class="btn-campaign" id="btn-campaign" title="Abrir Mapa de Mundos, Fases e Arsenal Permanente">
             🗺️ MAPA DE MUNDOS &amp; ARSENAL
           </button>
@@ -76,6 +83,9 @@
             <button class="btn-speed" data-speed="2">2X</button>
             <button class="btn-speed" data-speed="3">3X</button>
           </div>
+          <button class="btn-repair-all hidden" id="btn-repair-all" title="Reparar todas as estruturas danificadas">
+            🔧 REPARAR (0)
+          </button>
           <button class="btn-wave" id="btn-wave">INICIAR ONDA 1</button>
           <button class="btn-icon" id="btn-reset-cam" title="Centralizar Câmera 3D">🎯</button>
           <button class="btn-icon btn-mobile-sidebar" id="btn-toggle-sidebar" title="Abrir Painel Tático / Inspetor">📡</button>
@@ -94,6 +104,29 @@
               <button class="btn-tool-action hidden" id="btn-rotate-a10" type="button">🔄 GIRAR [R]</button>
               <button class="btn-tool-cancel" id="btn-cancel-tool" type="button">✕ CANCELAR</button>
             </div>
+          </div>
+          <div class="boss-hud-bar hidden" id="boss-hud-bar">
+            <div class="boss-hud-top">
+              <span id="boss-hud-name">CHEFE HOSTIL</span>
+              <span class="boss-hud-weapon" id="boss-hud-weapon"></span>
+            </div>
+            <div class="boss-hud-track">
+              <div class="boss-hud-fill" id="boss-hud-fill"></div>
+            </div>
+            <div class="boss-hud-hp-text" id="boss-hud-hp-text">0 / 0</div>
+          </div>
+          <div class="coop-squad-hud hidden" id="coop-squad-hud">
+            <div class="coop-hud-head">
+              <span id="coop-hud-room">SQUAD</span>
+              <span class="coop-hud-votes" id="coop-hud-votes"></span>
+            </div>
+            <div class="coop-roster-list" id="coop-roster-list"></div>
+          </div>
+          <div class="tactical-ping-bar" id="tactical-ping-bar" title="Pings Táticos Rápidos [G] + Clique no mapa">
+            <button class="btn-ping" data-ping="AA" title="Preciso de Antiaéreo aqui! [G]">⚠️ AA</button>
+            <button class="btn-ping" data-ping="BOSS" title="Foquem no Chefe / Alvo Pesado! [G]">🎯 CHEFE</button>
+            <button class="btn-ping" data-ping="REPAIR" title="Reparem esta defesa! [G]">🔧 REPARO</button>
+            <button class="btn-ping" data-ping="CASH" title="Preciso de Suprimento ($)! [G]">💰 $</button>
           </div>
           <div class="radar-alert hidden" id="radar-alert-banner"></div>
         </section>
@@ -126,6 +159,7 @@
               Clique em uma torre no mapa para inspecionar integridade (HP), alterar prioridade, reparar [R], fazer upgrade ou vender (75%).
             </div>
             <div id="inspector-body" class="hidden">
+              <div class="insp-owner-badge hidden" id="insp-owner-badge">COMANDANTE: --</div>
               <div class="insp-head">
                 <div>
                   <div class="insp-name" id="insp-name"></div>
@@ -147,12 +181,24 @@
                 </div>
               </div>
 
+              <div class="insp-hp-box hidden" id="insp-shield-box">
+                <div class="insp-hp-top">
+                  <span>ESCUDO DE ENERGIA</span>
+                  <strong id="insp-shield-text">0 / 0</strong>
+                </div>
+                <div class="insp-hp-track">
+                  <div class="insp-hp-fill" id="insp-shield-fill" style="background:#2dd4bf;"></div>
+                </div>
+              </div>
+
               <div class="insp-specs" id="insp-specs"></div>
 
               <div class="prio-section" id="prio-section">
                 <div class="sub-label">PRIORIDADE DE ALVO</div>
                 <div class="prio-grid" id="prio-grid"></div>
               </div>
+
+              <div class="spec-chooser hidden" id="spec-chooser"></div>
 
               <div class="insp-actions">
                 <button class="btn-repair" id="btn-repair">🔧 REPARAR DEFESA ($0) [R]</button>
@@ -163,6 +209,15 @@
                 <button class="btn-sell" id="btn-sell">VENDER (+$0)</button>
               </div>
             </div>
+          </div>
+
+          <!-- ENEMY INSPECTOR -->
+          <div class="panel enemy-inspector-panel hidden" id="enemy-inspector-panel">
+            <div class="enemy-insp-head">
+              <span class="panel-tag">INTEL // INIMIGO</span>
+              <button class="enemy-insp-close" id="btn-close-enemy-insp" type="button">✕</button>
+            </div>
+            <div id="enemy-insp-body"></div>
           </div>
 
           <!-- RADIO C4ISR FEED -->
@@ -178,7 +233,10 @@
 
       <!-- BOTTOM BUILD ARSENAL & AIR SUPPORT DOCK -->
       <footer class="dock">
-        <div class="arsenal-grid" id="arsenal-grid"></div>
+        <div class="arsenal-column">
+          <div class="arsenal-filters" id="arsenal-filters"></div>
+          <div class="arsenal-grid" id="arsenal-grid"></div>
+        </div>
         <div class="dock-divider"></div>
         <div class="support-grid">
           <button class="support-card" id="btn-a10" data-support="a10">
@@ -224,13 +282,14 @@
             <h2>MAPA DE MUNDOS &amp; ARSENAL TÁTICO</h2>
           </div>
           <div class="camp-header-right">
+            <button class="btn-coop" id="btn-campaign-coop" type="button">🌐 CO-OP SQUAD (1-4P)</button>
             <div class="wb-pill">🎖️ CRÉDITOS: <strong id="camp-wb-balance">250 WB$</strong></div>
             <button class="btn-icon" id="btn-close-campaign" title="Fechar">✕</button>
           </div>
         </div>
 
         <div class="camp-tabs">
-          <button class="camp-tab active" data-tab="worlds">🌍 MAPA DE MUNDOS &amp; FASES (3x5)</button>
+          <button class="camp-tab active" data-tab="worlds">🌍 MAPA DE MUNDOS &amp; FASES (4x5)</button>
           <button class="camp-tab" data-tab="arsenal">🔧 ARSENAL &amp; ENGENHARIA (WB$)</button>
           <button class="camp-tab" data-tab="save">💾 SALVAR / SLOTS &amp; BACKUP</button>
         </div>
@@ -290,6 +349,7 @@
               </div>
               <div class="save-sec-actions">
                 <button class="btn-install-pwa" id="btn-modal-install-pwa" type="button">📲 INSTALAR APP (PWA)</button>
+                <button class="btn-secondary" id="btn-force-update-pwa" type="button" title="Limpa apenas o cache de código antigo do PWA sem apagar seu Save">🔄 ATUALIZAR APP (MANTÉM SAVE)</button>
               </div>
             </div>
           </div>
@@ -342,6 +402,85 @@
           <li><strong>Atalhos:</strong> <code>[1-9, 0, -, =]</code> Construir | <code>[Q]</code> A-10 | <code>[E]</code> Hellfire | <code>[B]</code> B-52 | <code>[R]</code> Reparar torre | <code>[Space]</code> Pausa | <code>[Shift+Click]</code> Contínuo.</li>
         </ul>
         <button class="btn-primary" id="btn-close-help">RETORNAR AO COMANDO</button>
+      </div>
+    </div>
+
+    <!-- CO-OP MULTIPLAYER SQUAD & DECK MODAL -->
+    <div class="modal hidden" id="coop-modal">
+      <div class="modal-card modal-campaign coop-modal-card">
+        <div class="camp-header">
+          <div>
+            <div class="modal-badge">OPERAÇÃO CONJUNTA P2P // WEBRTC + BROADCAST LOCAL (1–4P)</div>
+            <h2>🌐 ESQUADRÃO CO-OP &amp; DECK TÁTICO</h2>
+          </div>
+          <div class="camp-header-right">
+            <span class="coop-status-pill" id="coop-status-badge">SINGLEPLAYER</span>
+            <button class="btn-icon" id="btn-close-coop" title="Fechar">✕</button>
+          </div>
+        </div>
+
+        <div class="coop-top-controls">
+          <div class="coop-field-group">
+            <label for="coop-callsign-input">CALLSIGN</label>
+            <input type="text" id="coop-callsign-input" maxlength="16" placeholder="CMDR-ALPHA" />
+          </div>
+          <div class="coop-room-actions" id="coop-connect-controls">
+            <button class="btn-launch" id="btn-coop-host" type="button">🛡️ CRIAR SALA CO-OP (HOST)</button>
+            <div class="coop-join-wrap">
+              <input type="text" id="coop-join-code" maxlength="10" placeholder="DFC-XXXX" />
+              <button class="btn-primary" id="btn-coop-join" type="button">ENTRAR NO ESQUADRÃO</button>
+            </div>
+          </div>
+          <div class="coop-room-active hidden" id="coop-active-controls">
+            <div class="coop-code-badge">
+              <span>SALA:</span>
+              <strong id="coop-room-code">DFC-XXXX</strong>
+            </div>
+            <button class="btn-secondary" id="btn-coop-copy" type="button">📋 COPIAR CÓDIGO</button>
+            <button class="btn-secondary" id="btn-coop-test-tab" type="button">🧪 ABRIR ABA ALIADA DE TESTE</button>
+            <button class="btn-sell" id="btn-coop-leave" type="button">✕ SAIR</button>
+          </div>
+        </div>
+
+        <div class="coop-slots-grid" id="coop-slots-grid"></div>
+
+        <div class="coop-deck-section">
+          <div class="coop-deck-head">
+            <span>DECK TÁTICO DO ESQUADRÃO (<strong id="coop-deck-count">6 / 6 TORRES</strong>)</span>
+            <small id="coop-deck-cap-info">Limite em campo: 30 torres (1P) • 20 (2P) • 15 (3P) • 12 (4P)</small>
+          </div>
+          <div class="coop-deck-grid" id="coop-deck-grid"></div>
+        </div>
+
+        <details class="coop-net-config">
+          <summary>⚙️ CONFIGURAÇÃO AVANÇADA DE REDE (NAT / TURN)</summary>
+          <div class="coop-net-grid">
+            <div class="coop-field-group">
+              <label for="coop-turn-url">STUN / TURN URL</label>
+              <input type="text" id="coop-turn-url" placeholder="turn:seu-servidor:3478" />
+            </div>
+            <div class="coop-field-group">
+              <label for="coop-turn-user">USUÁRIO TURN</label>
+              <input type="text" id="coop-turn-user" placeholder="opcional" />
+            </div>
+            <div class="coop-field-group">
+              <label for="coop-turn-pass">CREDENTIAL / SENHA</label>
+              <input type="password" id="coop-turn-pass" placeholder="opcional" />
+            </div>
+            <button class="btn-secondary" id="btn-coop-save-turn" type="button">💾 SALVAR STUN/TURN</button>
+          </div>
+        </details>
+
+        <div class="camp-footer coop-footer">
+          <div class="coop-stage-picker">
+            <label for="coop-stage-select">FASE DA MISSÃO:</label>
+            <select id="coop-stage-select"></select>
+          </div>
+          <div class="coop-match-actions">
+            <button class="btn-secondary" id="btn-coop-ready" type="button">⬜ MARCAR PRONTO</button>
+            <button class="btn-launch" id="btn-coop-start" type="button">🚀 INICIAR MISSÃO CO-OP</button>
+          </div>
+        </div>
       </div>
     </div>
 
