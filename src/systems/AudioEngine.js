@@ -106,6 +106,22 @@ class AudioEngine {
       gain.connect(this.master);
       osc.start(t);
       osc.stop(t + 0.48);
+    } else if (type === 'tesla') {
+      if (!this.canPlay('tesla', 95)) return;
+      this.percussiveBurst(t, 1280, 320, 0.11, 0.14, 'sawtooth', 3400);
+    } else if (type === 'railgun') {
+      if (!this.canPlay('railgun', 150)) return;
+      this.percussiveBurst(t, 920, 95, 0.22, 0.28, 'sawtooth', 4200);
+      this.noiseSweep(t, 2800, 280, 0.22, 0.2);
+    } else if (type === 'cryo' || type === 'toxic') {
+      if (!this.canPlay(type, 110)) return;
+      this.noiseSweep(t, type === 'cryo' ? 2200 : 880, type === 'cryo' ? 950 : 320, 0.16, 0.13);
+    } else if (type === 'flame') {
+      if (!this.canPlay('flame', 95)) return;
+      this.noiseSweep(t, 520, 210, 0.16, 0.14);
+    } else if (type === 'ballista' || type === 'sniper') {
+      if (!this.canPlay(type, 90)) return;
+      this.percussiveBurst(t, type === 'sniper' ? 380 : 240, 75, 0.11, 0.2, 'triangle', 1900);
     }
   }
 
@@ -265,6 +281,16 @@ class AudioEngine {
       gain.connect(this.master);
       osc.start(t);
       osc.stop(t + 0.38);
+    } else if (kind === 'ping') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(980, t);
+      osc.frequency.setValueAtTime(1320, t + 0.06);
+      gain.gain.setValueAtTime(0.12, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+      osc.connect(gain);
+      gain.connect(this.master);
+      osc.start(t);
+      osc.stop(t + 0.25);
     } else if (kind === 'build') {
       osc.type = 'square';
       osc.frequency.setValueAtTime(320, t);

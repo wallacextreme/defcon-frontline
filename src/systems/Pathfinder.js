@@ -11,7 +11,8 @@ export const CELL = {
   SPAWN: 3,
   FOB: 4,
   TOWER: 5,
-  BARRIER: 6
+  BARRIER: 6,
+  RESTRICTED: 7
 };
 
 export const SPAWN_POINTS = [
@@ -57,6 +58,15 @@ export class Pathfinder {
     this.fobPoint = { ...FOB_POINT };
     this.roadCells = [];
     this.rockCells = [];
+    this.restrictedCells = [];
+    this.iceCells = [];
+    this.fogCells = [];
+    this.toxicCells = [];
+    this.lavaCells = [];
+    this.iceSet = new Set();
+    this.fogSet = new Set();
+    this.toxicSet = new Set();
+    this.lavaSet = new Set();
     this.spawnPaths = new Map();
 
     this.loadStageLayout(getStageConfig(1, 1));
@@ -67,6 +77,11 @@ export class Pathfinder {
     this.fobPoint = { ...(stageConfig.fobPoint || FOB_POINT) };
     this.roadCells = stageConfig.roadCells || [];
     this.rockCells = stageConfig.rockCells || [];
+    this.restrictedCells = stageConfig.restrictedCells || [];
+    this.iceCells = stageConfig.iceCells || [];
+    this.fogCells = stageConfig.fogCells || [];
+    this.toxicCells = stageConfig.toxicCells || [];
+    this.lavaCells = stageConfig.lavaCells || [];
     this.reset();
   }
 
@@ -79,6 +94,11 @@ export class Pathfinder {
     this.flatGrid.fill(CELL.FREE);
     this.flatBase.fill(CELL.FREE);
     this.flatDist.fill(Infinity);
+
+    this.iceSet.clear();
+    this.fogSet.clear();
+    this.toxicSet.clear();
+    this.lavaSet.clear();
 
     for (const [c, r] of this.roadCells) {
       if (!this.inBounds(c, r)) continue;
@@ -100,6 +120,29 @@ export class Pathfinder {
       this.flatGrid[idx] = CELL.ROCK;
     }
 
+    for (const [c, r] of this.restrictedCells) {
+      if (!this.inBounds(c, r)) continue;
+      const idx = r * GRID_COLS + c;
+      if (this.flatBase[idx] === CELL.ROAD || this.flatBase[idx] === CELL.ROCK) continue;
+      this.baseTerrain[r][c] = CELL.RESTRICTED;
+      this.grid[r][c] = CELL.RESTRICTED;
+      this.flatBase[idx] = CELL.RESTRICTED;
+      this.flatGrid[idx] = CELL.RESTRICTED;
+    }
+
+    for (const [c, r] of this.iceCells) {
+      if (this.inBounds(c, r)) this.iceSet.add(r * GRID_COLS + c);
+    }
+    for (const [c, r] of this.fogCells) {
+      if (this.inBounds(c, r)) this.fogSet.add(r * GRID_COLS + c);
+    }
+    for (const [c, r] of this.toxicCells) {
+      if (this.inBounds(c, r)) this.toxicSet.add(r * GRID_COLS + c);
+    }
+    for (const [c, r] of this.lavaCells) {
+      if (this.inBounds(c, r)) this.lavaSet.add(r * GRID_COLS + c);
+    }
+
     for (const sp of this.spawnPoints) {
       this.baseTerrain[sp.row][sp.col] = CELL.SPAWN;
       this.grid[sp.row][sp.col] = CELL.SPAWN;
@@ -115,6 +158,22 @@ export class Pathfinder {
     this.flatGrid[fobIdx] = CELL.FOB;
 
     this.recomputeNavigation();
+  }
+
+  hasTerrainFeature(col, row, feature) {
+    if (!this.inBounds(col, row)) return false;
+    const idx = row * GRID_COLS + col;
+    if (feature === 'ice') return this.iceSet.has(idx);
+    if (feature === 'fog') return this.fogSet.has(idx);
+    if (feature === 'toxic') return this.toxicSet.has(idx);
+    if (feature === 'lava') return this.lavaSet.has(idx);
+    return false;
+  }
+
+  hasTerrainFeatureAtPx(x, y, feature) {
+    const col = Math.floor(x / TILE_SIZE);
+    const row = Math.floor(y / TILE_SIZE);
+    return this.hasTerrainFeature(col, row, feature);
   }
 
   inBounds(col, row) {

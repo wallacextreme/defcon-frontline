@@ -1,4 +1,4 @@
-const CACHE_NAME = 'defcon-frontline-pwa-v2';
+const CACHE_NAME = 'defcon-frontline-pwa-v5';
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -13,6 +13,12 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS).catch(() => {}))
   );
   self.skipWaiting();
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {
@@ -31,8 +37,13 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  const networkRequest =
+    request.mode === 'navigate'
+      ? fetch(request, { cache: 'no-store' })
+      : fetch(request);
+
   event.respondWith(
-    fetch(request)
+    networkRequest
       .then((response) => {
         if (response && response.ok) {
           const copy = response.clone();

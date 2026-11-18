@@ -9,7 +9,12 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { bus } from '../core/EventBus.js';
 import { getPBRTextures } from './ProceduralPBRTextures.ts';
 import { ObjectPool } from '../core/ObjectPool.js';
-import { TOWER_DEFINITIONS, AIR_SUPPORT_DEFINITIONS } from '../data/towers.js';
+import {
+  TOWER_DEFINITIONS,
+  AIR_SUPPORT_DEFINITIONS,
+  getTowerLevelSpec,
+  getTowerUpgradeOptions
+} from '../data/towers.js';
 import { ENEMY_DEFINITIONS } from '../data/enemies.js';
 import { getWorldConfig, getStageConfig } from '../data/worlds.js';
 import {
@@ -21,10 +26,22 @@ import {
   Pathfinder,
   GRID_COLS,
   GRID_ROWS,
-  TILE_SIZE
+  TILE_SIZE,
+  CELL
 } from '../systems/Pathfinder.js';
 import { resolveDamage } from '../systems/DamageSystem.js';
 import { audio } from '../systems/AudioEngine.js';
+import {
+  multiplayer,
+  getMaxTowersPerPlayer,
+  getCoopEnemyScale,
+  getCoopFobMaxHp,
+  getRequiredWaveVotes,
+  distributeKillReward,
+  CombatNetEvent,
+  SQUAD_COLORS,
+  PingType
+} from '../systems/MultiplayerManager.ts';
 import {
   createTowerModel3D,
   createEnemyModel3D,
@@ -72,6 +89,10 @@ interface TowerEntity {
   id: string;
   defId: string;
   def: any;
+  ownerId: string;
+  ownerName: string;
+  ownerColor: string;
+  ownerRingMesh?: THREE.Mesh;
   col: number;
   row: number;
   x: number;
@@ -79,10 +100,13 @@ interface TowerEntity {
   wx: number;
   wz: number;
   level: number;
+  specialization: 'A' | 'B' | null;
   effectiveCost: number;
   totalInvested: number;
   hp: number;
   maxHp: number;
+  shield: number;
+  maxShield: number;
   priority: string;
   turretAngle: number;
   cooldownTimer: number;
@@ -90,9 +114,22 @@ interface TowerEntity {
   empDisabledTimer: number;
   burnTimer: number;
   burnDps: number;
+  corrosionTimer: number;
+  corrosionDps: number;
+  chillTimer: number;
+  chillSlow: number;
   smokeTimer: number;
   trophyTimer: number;
   interceptTimer: number;
+  incomeAccum: number;
+  rebuildCooldownTimer: number;
+  allyRangeBuff: number;
+  allyFireRateBuff: number;
+  allyCritBonus: number;
+  allyKillBonus: number;
+  allyHpBonus: number;
+  repairCostDiscount: number;
+  fogDebuff: boolean;
   laserTargetId: number;
   laserFocusTime: number;
   laserTickAccum: number;
@@ -122,6 +159,8 @@ interface EnemyEntity {
   angle: number;
   hp: number;
   maxHp: number;
+  shield: number;
+  maxShield: number;
   speed: number;
   reward: number;
   wbReward: number;
@@ -134,13 +173,18 @@ interface EnemyEntity {
   apsMaxCooldown: number;
   isStealth: boolean;
   stealthRevealed: boolean;
+  revealedTimer: number;
   isBoss: boolean;
   isSubBoss: boolean;
   isStageBoss: boolean;
   isMegaBoss: boolean;
   slowImmune: boolean;
+  frontalShieldReduction: number;
+  isBurrowed: boolean;
+  unburrowed: boolean;
   dismountCount: number;
   radius: number;
+  resistances: Record<string, number> | null;
   path: Array<{ col: number; row: number; x: number; y: number }> | null;
   pathIndex: number;
   distToFob: number;
@@ -148,13 +192,34 @@ interface EnemyEntity {
   ewDamageAmp: number;
   thermalVuln: number;
   ewDisabled: boolean;
+  cryoSlow: number;
+  cryoSlowTimer: number;
+  rootTimer: number;
   stunTimer: number;
+  poisonTimer: number;
+  poisonDps: number;
+  poisonSourceTower: TowerEntity | null;
+  burnTimer: number;
+  burnDps: number;
+  burnSourceTower: TowerEntity | null;
+  corrosionReduction: number;
+  corrosionTimer: number;
+  markedAmp: number;
+  markedTimer: number;
+  dotTickAccum: number;
+  healAuraTimer: number;
+  shieldAuraTimer: number;
+  shockwaveTimer: number;
   hitFlashTimer: number;
   walkPhase: number;
   towerAttackTimer: number;
+  attackPrepTimer: number;
+  isPreparingAttack: boolean;
+  pendingAttackTargets: TowerEntity[];
   empPulseTimer: number;
   periodicSpawnTimer: number;
   triggeredThresholds: Set<number>;
+  damageByPlayer: Record<string, number>;
   rig: EnemyRig3D | null;
   hpEl: HTMLDivElement;
   hpFillEl: HTMLDivElement;
@@ -196,15 +261,28 @@ interface ProjectileEntity {
   heavyMultiplier: number;
   tandemHeat: boolean;
   critChance: number;
+  critMultiplier: number;
   splashRadius: number;
   burnDps: number;
   burnDuration: number;
+  poisonDps: number;
+  poisonDuration: number;
+  corrosionAmount: number;
+  slowFactor: number;
+  slowDuration: number;
+  freezeDuration: number;
+  rootDuration: number;
+  markedAmp: number;
+  thermalVuln: number;
+  createsToxicZone: boolean;
+  allowApsBypass: boolean;
   isMissile: boolean;
   isTopAttack: boolean;
   isArtillery: boolean;
   flightTime: number;
   totalFlightTime: number;
   sourceTower: TowerEntity | null;
+  ownerId?: string;
   smokeTimer: number;
   life: number;
   _pooledActive?: boolean;
@@ -230,10 +308,52 @@ interface BossProjectileEntity {
   splashRadius: number;
   burnDps: number;
   burnDuration: number;
+  corrosionDps: number;
+  corrosionDuration: number;
+  chillDuration: number;
+  chillSlow: number;
+  empDisableDuration: number;
   flightTime: number;
   totalFlightTime: number;
   smokeTimer: number;
   alive: boolean;
+}
+
+interface ActiveMineEntity {
+  x: number;
+  y: number;
+  wx: number;
+  wz: number;
+  damage: number;
+  damageType: string;
+  splashRadius: number;
+  stunDuration: number;
+  slowFactor: number;
+  slowDuration: number;
+  burnDps: number;
+  burnDuration: number;
+  heavyMultiplier: number;
+  markedAmp: number;
+  sourceTower: TowerEntity;
+  mesh: THREE.Mesh;
+}
+
+interface DestroyedRuinEntity {
+  col: number;
+  row: number;
+  wx: number;
+  wz: number;
+  defId: string;
+  level: number;
+  specialization: 'A' | 'B' | null;
+  rebuildCost: number;
+  mesh: THREE.Mesh;
+  life: number;
+}
+
+interface TransientBeamEntity {
+  line: THREE.Line;
+  life: number;
 }
 
 interface FireZoneEntity {
@@ -243,6 +363,9 @@ interface FireZoneEntity {
   wz: number;
   radius: number;
   dps: number;
+  damageType: string;
+  corrosionAmount: number;
+  ownerId?: string;
   life: number;
   maxLife: number;
   tickAccum: number;
@@ -262,8 +385,8 @@ interface FloatingTextEntity {
 }
 
 function getAirAltitude(type: string): number {
-  if (type === 'drone_swarm') return 3.5;
-  if (type === 'heli' || type === 'subboss_ka50') return 4.25;
+  if (type === 'drone_swarm' || type === 'drone_recon') return 3.55;
+  if (type === 'heli' || type === 'subboss_ka50' || type === 'drone_bombardeiro') return 4.25;
   if (type === 'stealth' || type === 'boss_tu160') return 4.8;
   if (type === 'megaboss_kirov_airship') return 5.4;
   return 0.65;
@@ -326,10 +449,12 @@ export class Battlefield3D {
   private strafeAngle = 0;
   private strafeDragStart: { x: number; y: number } | null = null;
   private selectedTower: TowerEntity | null = null;
+  private selectedEnemy: EnemyEntity | null = null;
   private hoveredEnemy: EnemyEntity | null = null;
   private hoverTile = { col: -1, row: -1 };
   private lastCanPlace: any = null;
   private lastTowerAttackWarnTime = -10;
+  private extractorCapWarned = false;
 
   private trauma = 0;
   private hitStopTimer = 0;
@@ -345,6 +470,14 @@ export class Battlefield3D {
   private pendingShots: any[] = [];
   private bossProjectiles: BossProjectileEntity[] = [];
   private fireZones: FireZoneEntity[] = [];
+  private activeMines: ActiveMineEntity[] = [];
+  private destroyedRuins: DestroyedRuinEntity[] = [];
+  private transientBeams: TransientBeamEntity[] = [];
+  private mineGeo = new THREE.CylinderGeometry(0.42, 0.48, 0.18, 10);
+  private mineMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xb45309, emissiveIntensity: 0.9, roughness: 0.4 });
+  private empMineMat = new THREE.MeshStandardMaterial({ color: 0xc084fc, emissive: 0x7e22ce, emissiveIntensity: 1.1, roughness: 0.35 });
+  private ruinGeo = new THREE.BoxGeometry(2.6, 0.35, 2.6);
+  private ruinMat = new THREE.MeshBasicMaterial({ color: 0xfbbf24, wireframe: true, transparent: true, opacity: 0.65 });
 
   // 3D Overlays
   private routeLinesGroup = new THREE.Group();
@@ -383,11 +516,47 @@ export class Battlefield3D {
     blending: THREE.AdditiveBlending
   });
   private ewPulseGeo = new THREE.RingGeometry(0.92, 1.0, 48);
+  private ownerRingGeo = new THREE.RingGeometry(1.42, 1.62, 28);
+  private pingBeaconGeo = new THREE.CylinderGeometry(0.14, 0.24, 9.5, 10, 1, true);
+  private pingRingGeo = new THREE.RingGeometry(0.65, 0.9, 28);
 
   private rafId = 0;
   private lastFrameTime = performance.now();
   private hudSyncAccum = 0;
   private autosaveAccum = 0;
+  private snapshotAccum = 0;
+  private waveVoteTimer = 0;
+  private armedPingType: PingType | null = null;
+  private allyCursors = new Map<
+    string,
+    {
+      col: number;
+      row: number;
+      wx: number;
+      wz: number;
+      callsign: string;
+      color: string;
+      group: THREE.Group;
+      tileMesh: THREE.Mesh;
+      ringMesh: THREE.LineLoop;
+      labelEl: HTMLDivElement;
+      updatedAt: number;
+    }
+  >();
+  private activePings: Array<{
+    wx: number;
+    wz: number;
+    life: number;
+    maxLife: number;
+    group: THREE.Group;
+    ring: THREE.Mesh;
+    labelEl: HTMLDivElement;
+  }> = [];
+  private clientEnemyTargets = new Map<
+    number,
+    { wx: number; wy: number; wz: number; angle: number }
+  >();
+  private coopUnsubs: Array<() => void> = [];
   private resizeObserver!: ResizeObserver;
   private unsubs: Array<() => void> = [];
   private baseCameraOffset = new THREE.Vector3();
@@ -414,6 +583,7 @@ export class Battlefield3D {
     this.initOverlays();
     this.initInput();
     this.bindBusCommands();
+    this.initCoopCallbacks();
     this.bindPersistenceLifecycle();
 
     // Load saved stage & prewarm all models + compile shaders BEFORE player interaction
@@ -660,6 +830,8 @@ export class Battlefield3D {
           angle: 0,
           hp: 100,
           maxHp: 100,
+          shield: 0,
+          maxShield: 0,
           speed: 90,
           reward: 15,
           wbReward: 0,
@@ -672,13 +844,18 @@ export class Battlefield3D {
           apsMaxCooldown: 4.0,
           isStealth: false,
           stealthRevealed: false,
+          revealedTimer: 0,
           isBoss: false,
           isSubBoss: false,
           isStageBoss: false,
           isMegaBoss: false,
           slowImmune: false,
+          frontalShieldReduction: 0,
+          isBurrowed: false,
+          unburrowed: false,
           dismountCount: 0,
           radius: 14,
+          resistances: null,
           path: null,
           pathIndex: 0,
           distToFob: 9999,
@@ -686,13 +863,34 @@ export class Battlefield3D {
           ewDamageAmp: 0,
           thermalVuln: 0,
           ewDisabled: false,
+          cryoSlow: 0,
+          cryoSlowTimer: 0,
+          rootTimer: 0,
           stunTimer: 0,
+          poisonTimer: 0,
+          poisonDps: 0,
+          poisonSourceTower: null,
+          burnTimer: 0,
+          burnDps: 0,
+          burnSourceTower: null,
+          corrosionReduction: 0,
+          corrosionTimer: 0,
+          markedAmp: 0,
+          markedTimer: 0,
+          dotTickAccum: 0,
+          healAuraTimer: 1.5,
+          shieldAuraTimer: 1.5,
+          shockwaveTimer: 6.0,
           hitFlashTimer: 0,
           walkPhase: Math.random() * 6.28,
           towerAttackTimer: 2.0,
+          attackPrepTimer: 0,
+          isPreparingAttack: false,
+          pendingAttackTargets: [],
           empPulseTimer: 5.0,
           periodicSpawnTimer: 8.0,
           triggeredThresholds: new Set<number>(),
+          damageByPlayer: {},
           rig: null,
           hpEl,
           hpFillEl,
@@ -704,6 +902,9 @@ export class Battlefield3D {
               e.rig = null;
             }
             hpEl.classList.add('hidden');
+            if (this.selectedEnemy === e) {
+              this.selectedEnemy = null;
+            }
           }
         };
         return e;
@@ -749,15 +950,28 @@ export class Battlefield3D {
           heavyMultiplier: 1,
           tandemHeat: false,
           critChance: 0,
+          critMultiplier: 1.6,
           splashRadius: 0,
           burnDps: 0,
           burnDuration: 0,
+          poisonDps: 0,
+          poisonDuration: 0,
+          corrosionAmount: 0,
+          slowFactor: 0,
+          slowDuration: 0,
+          freezeDuration: 0,
+          rootDuration: 0,
+          markedAmp: 0,
+          thermalVuln: 0,
+          createsToxicZone: false,
+          allowApsBypass: false,
           isMissile: false,
           isTopAttack: false,
           isArtillery: false,
           flightTime: 0,
           totalFlightTime: 1,
           sourceTower: null,
+          ownerId: undefined,
           smokeTimer: 0,
           life: 3,
           onRelease: () => {
@@ -824,6 +1038,11 @@ export class Battlefield3D {
         this.hoverTile.col = col;
         this.hoverTile.row = row;
         this.evaluatePlacementPreview();
+        multiplayer.sendCursorMove(
+          col,
+          row,
+          this.activeTool?.kind === 'build' ? this.activeTool.towerId : null
+        );
         bus.emit('cursor:move', {
           col,
           row,
@@ -911,7 +1130,10 @@ export class Battlefield3D {
       if (moveDist > maxMove) return;
 
       if (button === 2) {
-        if (this.activeTool) {
+        if (this.armedPingType) {
+          this.armedPingType = null;
+          bus.emit('hud:pingArmed', null);
+        } else if (this.activeTool) {
           this.cancelActiveTool();
         } else if (this.selectedTower) {
           this.selectTower(null);
@@ -920,6 +1142,13 @@ export class Battlefield3D {
       }
 
       if (button !== 0 || this.gameOver) return;
+
+      if (this.armedPingType) {
+        multiplayer.sendTacticalPing(this.armedPingType, col, row, this.hoverWorld.x, this.hoverWorld.z);
+        this.armedPingType = null;
+        bus.emit('hud:pingArmed', null);
+        return;
+      }
 
       if (this.activeTool?.kind === 'support') {
         if (this.activeTool.supportId === 'hellfire') {
@@ -941,8 +1170,19 @@ export class Battlefield3D {
         this.selectTower(this.towerGrid[row][col]);
         bus.emit('hud:openMobileInspector');
         audio.playUi('click');
-      } else {
+      } else if (this.hoveredEnemy) {
         this.selectTower(null);
+        this.selectEnemy(this.hoveredEnemy);
+        bus.emit('hud:openMobileInspector');
+        audio.playUi('click');
+      } else {
+        const ruinIdx = this.destroyedRuins.findIndex((r) => r.col === col && r.row === row);
+        if (ruinIdx !== -1) {
+          this.tryRebuildRuin(ruinIdx);
+        } else {
+          this.selectTower(null);
+          this.selectEnemy(null);
+        }
       }
     });
 
@@ -964,11 +1204,19 @@ export class Battlefield3D {
       this.keysDown.add(lower);
 
       if (ev.key === 'Escape') {
+        this.armedPingType = null;
+        bus.emit('hud:pingArmed', null);
         this.cancelActiveTool();
         this.selectTower(null);
       } else if (ev.key === ' ') {
         ev.preventDefault();
         this.togglePause();
+      } else if (lower === 'g') {
+        const activeTargetPing: PingType | null = this.armedPingType ? null : 'BOSS';
+        this.armedPingType = activeTargetPing;
+        if (activeTargetPing) this.cancelActiveTool();
+        bus.emit('hud:pingArmed', activeTargetPing);
+        audio.playUi('click');
       } else if (lower === 'r') {
         if (this.activeTool?.kind === 'support' && this.activeTool.supportId === 'a10') {
           this.strafeAngle += Math.PI / 4;
@@ -1023,7 +1271,10 @@ export class Battlefield3D {
       bus.on('cmd:startWave', () => this.startNextWave(true)),
       bus.on('cmd:setSpeed', (speed: number) => this.setSpeed(speed)),
       bus.on('cmd:upgradeTower', () => this.upgradeSelectedTower()),
+      bus.on('cmd:specializeTower', ({ branch }: { branch: 'A' | 'B' }) => this.specializeSelectedTower(branch)),
       bus.on('cmd:repairTower', () => this.repairSelectedTower()),
+      bus.on('cmd:repairAllTowers', () => this.repairAllTowers()),
+      bus.on('cmd:inspectEnemy', (enemyType: string) => this.inspectEnemyDefinition(enemyType)),
       bus.on('cmd:sellTower', () => this.sellSelectedTower()),
       bus.on('cmd:setPriority', (prio: string) => this.setSelectedTowerPriority(prio)),
       bus.on('cmd:restart', () => {
@@ -1100,12 +1351,807 @@ export class Battlefield3D {
       bus.on('cmd:toggleMute', () => {
         const muted = audio.toggleMute();
         bus.emit('hud:mute', muted);
+      }),
+      bus.on('cmd:armPing', (pingType: PingType | null) => {
+        this.armedPingType = this.armedPingType === pingType ? null : pingType;
+        if (this.armedPingType) {
+          this.cancelActiveTool();
+        }
+        audio.playUi('click');
+        bus.emit('hud:pingArmed', this.armedPingType);
+      }),
+      bus.on('cmd:donateCash', ({ toPlayerId, amount }: { toPlayerId: string; amount: number }) => {
+        if (multiplayer.isClient()) {
+          multiplayer.sendCombatCommand('CMD_DONATE_CASH', { toPlayerId, amount });
+        } else if (multiplayer.isHost()) {
+          this.handleDonateCash(multiplayer.localPeerId, toPlayerId, amount);
+        }
+      }),
+      bus.on('cmd:coopStartMatch', ({ worldId, stageId }: { worldId: number; stageId: number }) => {
+        if (!multiplayer.isHost()) return;
+        const stCfg = getStageConfig(worldId, stageId);
+        multiplayer.startCoopMatch(worldId, stageId, stCfg?.startingBudget || 750);
       })
     ];
   }
 
+  private initCoopCallbacks() {
+    this.coopUnsubs = [
+      multiplayer.onStartMatch(({ worldId, stageId }) => {
+        saveManager.clearActiveMission();
+        saveManager.selectStage(worldId, stageId);
+        this.loadStage(worldId, stageId, false, null);
+        audio.playUi('wave');
+      }),
+      multiplayer.onRemoteRadio((msg) => {
+        this.pushRadio(msg.text, msg.level);
+      }),
+      multiplayer.onAllyCursor((cur) => this.handleAllyCursor(cur)),
+      multiplayer.onTacticalPing((ping) => this.spawnTacticalPingVisual(ping)),
+      multiplayer.onHostCommand((type, payload, senderId) => this.handleHostCoopCommand(type, payload, senderId)),
+      multiplayer.onSnapshot((snap) => this.applyClientSnapshot(snap)),
+      multiplayer.onCombatEvents((events) => this.handleClientCombatEvents(events)),
+      multiplayer.onResyncRequest(() => {
+        if (multiplayer.isHost()) {
+          this.broadcastCoopSnapshot();
+        }
+      }),
+      multiplayer.onOwnershipRebind(({ oldPeerId, newPeerId, callsign }) => {
+        for (const t of this.towers) {
+          if (t.ownerId === oldPeerId) {
+            t.ownerId = newPeerId;
+            if (callsign) t.ownerName = callsign;
+          }
+        }
+        this.enemyPool.forEachActive((obj) => {
+          const e = obj as EnemyEntity;
+          if (e.damageByPlayer && e.damageByPlayer[oldPeerId] !== undefined) {
+            e.damageByPlayer[newPeerId] = (e.damageByPlayer[newPeerId] || 0) + e.damageByPlayer[oldPeerId];
+            delete e.damageByPlayer[oldPeerId];
+          }
+        });
+        if (multiplayer.isHost()) {
+          this.broadcastCoopSnapshot();
+        }
+      }),
+      multiplayer.onCommandReject(({ commandType, reason }) => {
+        this.pushRadio(`⚠️ Comando ${commandType} rejeitado: ${reason}`, 'warn');
+        audio.playUi('error');
+      })
+    ];
+  }
+
+  private getActorBudget(actorId = multiplayer.localPeerId): number {
+    if (!multiplayer.isActive()) return this.budget;
+    const p = multiplayer.getPlayer(actorId);
+    if (!p) return actorId === multiplayer.localPeerId ? this.budget : 0;
+    return p.budget;
+  }
+
+  private addActorBudget(actorId: string, delta: number) {
+    if (!multiplayer.isActive()) {
+      this.budget = Math.max(0, Math.round(this.budget + delta));
+      return;
+    }
+    const p = multiplayer.getPlayer(actorId);
+    if (p) {
+      p.budget = Math.max(0, Math.round(p.budget + delta));
+      if (p.peerId === multiplayer.localPeerId) {
+        this.budget = p.budget;
+      }
+    }
+  }
+
+  private syncHostPlayerTowerCounts() {
+    if (!multiplayer.isActive()) return;
+    const cap = getMaxTowersPerPlayer(multiplayer.getConnectedPlayerCount());
+    for (const p of multiplayer.getPlayers()) {
+      p.towerCount = this.towers.filter((t) => t.ownerId === p.peerId).length;
+      p.maxTowers = cap;
+    }
+  }
+
+  private handleHostCoopCommand(type: string, payload: any, senderId: string) {
+    if (!multiplayer.isHost() || this.gameOver) return;
+    if (type === 'CMD_BUILD_TOWER') {
+      this.tryPlaceTower(payload.col, payload.row, payload.towerType, senderId);
+    } else if (type === 'CMD_UPGRADE_TOWER') {
+      const t = this.towers.find((x) => x.id === payload.towerId);
+      if (t) this.upgradeTowerByActor(t, senderId);
+    } else if (type === 'CMD_SPECIALIZE_TOWER') {
+      const t = this.towers.find((x) => x.id === payload.towerId);
+      if (t) this.specializeTowerByActor(t, payload.branch, senderId);
+    } else if (type === 'CMD_SET_TARGETING') {
+      const t = this.towers.find((x) => x.id === payload.towerId);
+      if (t) this.setTowerPriorityByActor(t, payload.mode, senderId);
+    } else if (type === 'CMD_SELL_TOWER') {
+      const t = this.towers.find((x) => x.id === payload.towerId);
+      if (t) this.sellTowerByActor(t, senderId);
+    } else if (type === 'CMD_REPAIR_TOWER') {
+      const t = this.towers.find((x) => x.id === payload.towerId);
+      if (t) this.repairTowerByActor(t, senderId);
+    } else if (type === 'CMD_REPAIR_ALL') {
+      this.repairAllTowersByActor(senderId);
+    } else if (type === 'CMD_REBUILD_RUBBLE') {
+      const idx = this.destroyedRuins.findIndex((r) => r.col === payload.col && r.row === payload.row);
+      if (idx !== -1) this.tryRebuildRuin(idx, false, senderId);
+    } else if (type === 'CMD_AIR_SUPPORT') {
+      const simX = worldToSimX(payload.worldX ?? 0);
+      const simY = worldToSimY(payload.worldZ ?? 0);
+      if (payload.supportType === 'a10') {
+        this.executeA10Strafe(simX, simY, payload.angle || 0, senderId);
+      } else if (payload.supportType === 'hellfire') {
+        this.executeHellfireStrike(simX, simY, senderId);
+      } else if (payload.supportType === 'b52') {
+        this.executeB52CarpetBomb(simX, simY, senderId);
+      }
+    } else if (type === 'CMD_VOTE_NEXT_WAVE') {
+      this.handleVoteNextWave(senderId);
+    } else if (type === 'CMD_DONATE_CASH') {
+      this.handleDonateCash(senderId, payload.toPlayerId, Number(payload.amount));
+    }
+  }
+
+  private handleDonateCash(fromPeerId: string, toPeerId: string, amount: number) {
+    if (!multiplayer.isHost()) return;
+    const check = multiplayer.validateDonation(fromPeerId, toPeerId, amount);
+    if (!check.ok) {
+      if (fromPeerId === multiplayer.localPeerId) {
+        this.pushRadio(check.error || 'Doação recusada.', 'warn');
+        audio.playUi('error');
+      }
+      return;
+    }
+    const sender = multiplayer.getPlayer(fromPeerId)!;
+    const receiver = multiplayer.getPlayer(toPeerId)!;
+    this.addActorBudget(fromPeerId, -amount);
+    this.addActorBudget(toPeerId, amount);
+    const msg = `💸 ${sender.callsign} enviou $${amount} para ${receiver.callsign}!`;
+    this.pushRadio(msg, 'good');
+    multiplayer.broadcastRadio(msg, 'good', this.currentWave);
+    multiplayer.broadcastLobbyState();
+    this.emitFullHudSync();
+  }
+
+  private handleVoteNextWave(actorId: string) {
+    if (this.gameOver || !multiplayer.isHost()) return;
+    if (this.waveActive && (this.spawnQueue.length > 0 || this.currentWave >= this.totalWaves)) return;
+    if (this.currentWave >= this.totalWaves) return;
+
+    const p = multiplayer.getPlayer(actorId);
+    const voteRes = multiplayer.registerWaveVote(actorId);
+    if (!voteRes.passed && voteRes.votes > 0 && this.waveVoteTimer <= 0) {
+      this.waveVoteTimer = 20;
+      multiplayer.setWaveVoteTimer(20);
+    }
+
+    const countdownSuffix = !voteRes.passed && this.waveVoteTimer > 0 ? ` • auto em ${Math.ceil(this.waveVoteTimer)}s` : '';
+    const msg = `🗳️ ${p?.callsign || 'CMDR'} votou para chamar Onda ${this.currentWave + 1} (${voteRes.votes}/${voteRes.required}${countdownSuffix}).`;
+    this.pushRadio(msg, 'info');
+    multiplayer.broadcastRadio(msg, 'info', this.currentWave);
+
+    if (voteRes.passed) {
+      this.waveVoteTimer = 0;
+      multiplayer.setWaveVoteTimer(0);
+      this.startNextWave(true, true);
+    } else {
+      this.broadcastCoopSnapshot();
+      this.emitFullHudSync();
+    }
+  }
+
+  private handleAllyCursor(cur: {
+    playerId: string;
+    callsign: string;
+    color: string;
+    col: number;
+    row: number;
+    selectedTowerType: string | null;
+  }) {
+    if (!cur || cur.playerId === multiplayer.localPeerId) return;
+    if (!this.pathfinder.inBounds(cur.col, cur.row)) return;
+
+    let entry = this.allyCursors.get(cur.playerId);
+    const { x: wx, z: wz } = cellToWorldCenter(cur.col, cur.row);
+    const colorHex = new THREE.Color(cur.color || SQUAD_COLORS[1]).getHex();
+
+    if (!entry) {
+      const group = new THREE.Group();
+      const tileMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(CELL_WORLD * 0.9, CELL_WORLD * 0.9),
+        new THREE.MeshBasicMaterial({
+          color: colorHex,
+          transparent: true,
+          opacity: 0.28,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        })
+      );
+      tileMesh.rotation.x = -Math.PI / 2;
+      tileMesh.position.y = 0.08;
+      group.add(tileMesh);
+
+      const ringMesh = this.createCircleLoop(36, colorHex, 0.72);
+      ringMesh.position.y = 0.11;
+      group.add(ringMesh);
+      this.scene.add(group);
+
+      const labelEl = document.createElement('div');
+      labelEl.className = 'ally-cursor-tag';
+      labelEl.style.borderColor = cur.color;
+      labelEl.style.color = cur.color;
+      this.overlayEl.appendChild(labelEl);
+
+      entry = {
+        col: cur.col,
+        row: cur.row,
+        wx,
+        wz,
+        callsign: cur.callsign,
+        color: cur.color,
+        group,
+        tileMesh,
+        ringMesh,
+        labelEl,
+        updatedAt: this.elapsedReal
+      };
+      this.allyCursors.set(cur.playerId, entry);
+    }
+
+    entry.col = cur.col;
+    entry.row = cur.row;
+    entry.wx = wx;
+    entry.wz = wz;
+    entry.callsign = cur.callsign;
+    entry.updatedAt = this.elapsedReal;
+    entry.group.visible = true;
+    entry.group.position.set(wx, 0, wz);
+
+    const def = cur.selectedTowerType ? (TOWER_DEFINITIONS as any)[cur.selectedTowerType] : null;
+    const range = def?.levels?.[0]?.range || 0;
+    if (range > 0) {
+      entry.ringMesh.visible = true;
+      entry.ringMesh.scale.setScalar(range * WORLD_SCALE);
+    } else {
+      entry.ringMesh.visible = false;
+    }
+    entry.labelEl.textContent = def ? `${cur.callsign} [${def.shortName}]` : cur.callsign;
+  }
+
+  private spawnTacticalPingVisual(ping: {
+    playerId: string;
+    callsign: string;
+    color: string;
+    pingType: PingType;
+    col: number;
+    row: number;
+    worldX: number;
+    worldZ: number;
+  }) {
+    const pingTextMap: Record<PingType, string> = {
+      AA: '⚠️ PRECISO DE ANTIAÉREO AQUI!',
+      BOSS: '🎯 FOQUEM NO CHEFE / ALVO PESADO!',
+      REPAIR: '🔧 REPAREM ESTA DEFESA!',
+      CASH: '💰 PRECISO DE SUPRIMENTO ($)!'
+    };
+    const msg = pingTextMap[ping.pingType] || pingTextMap.BOSS;
+    const colorHex = new THREE.Color(ping.color || '#facc15').getHex();
+
+    const wx = Number.isFinite(ping.worldX) ? ping.worldX : cellToWorldCenter(ping.col, ping.row).x;
+    const wz = Number.isFinite(ping.worldZ) ? ping.worldZ : cellToWorldCenter(ping.col, ping.row).z;
+
+    const group = new THREE.Group();
+    group.position.set(wx, 0, wz);
+
+    const beacon = new THREE.Mesh(
+      this.pingBeaconGeo,
+      new THREE.MeshBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      })
+    );
+    beacon.position.y = 4.75;
+    group.add(beacon);
+
+    const ring = new THREE.Mesh(
+      this.pingRingGeo,
+      new THREE.MeshBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.16;
+    group.add(ring);
+    this.scene.add(group);
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'tactical-ping-label';
+    labelEl.style.borderColor = ping.color;
+    labelEl.style.color = ping.color;
+    labelEl.textContent = `${ping.callsign}: ${msg}`;
+    this.overlayEl.appendChild(labelEl);
+
+    this.activePings.push({
+      wx,
+      wz,
+      life: 4.0,
+      maxLife: 4.0,
+      group,
+      ring,
+      labelEl
+    });
+
+    audio.playUi('ping');
+    this.pushRadio(`📡 ${ping.callsign}: ${msg}`, 'warn');
+  }
+
+  private updateCoopVisuals(dt: number) {
+    for (let i = this.activePings.length - 1; i >= 0; i--) {
+      const p = this.activePings[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        this.scene.remove(p.group);
+        p.group.traverse((ch: any) => {
+          if (ch.material) ch.material.dispose?.();
+        });
+        p.labelEl.remove();
+        this.activePings.splice(i, 1);
+        continue;
+      }
+      const prog = 1 - p.life / p.maxLife;
+      const wave = (prog * 3) % 1;
+      p.ring.scale.setScalar(0.8 + wave * 2.8);
+      (p.ring.material as THREE.MeshBasicMaterial).opacity = (1 - wave) * 0.85;
+      p.labelEl.style.opacity = String(Math.min(1, p.life * 1.5));
+    }
+
+    for (const [, cur] of this.allyCursors) {
+      const age = this.elapsedReal - cur.updatedAt;
+      const visible = multiplayer.isActive() && age < 6.0;
+      cur.group.visible = visible;
+      if (!visible) cur.labelEl.classList.add('hidden');
+    }
+  }
+
+  private clearCoopVisuals() {
+    for (const [, cur] of this.allyCursors) {
+      this.scene.remove(cur.group);
+      cur.labelEl.remove();
+    }
+    this.allyCursors.clear();
+    for (const p of this.activePings) {
+      this.scene.remove(p.group);
+      p.labelEl.remove();
+    }
+    this.activePings = [];
+    this.clientEnemyTargets.clear();
+  }
+
+  private broadcastCoopSnapshot() {
+    if (!multiplayer.isHost()) return;
+    this.syncHostPlayerTowerCounts();
+    const enemies: any[] = [];
+    this.enemyPool.forEachActive((obj) => {
+      const e = obj as EnemyEntity;
+      enemies.push({
+        id: e.id,
+        type: e.type,
+        wx: Number(e.wx.toFixed(2)),
+        wy: Number(e.wy.toFixed(2)),
+        wz: Number(e.wz.toFixed(2)),
+        x: Math.round(e.x),
+        y: Math.round(e.y),
+        angle: Number(e.angle.toFixed(2)),
+        hp: Math.ceil(e.hp),
+        maxHp: e.maxHp,
+        shield: Math.round(e.shield),
+        maxShield: e.maxShield,
+        isStealth: e.isStealth,
+        stealthRevealed: e.stealthRevealed,
+        isBurrowed: e.isBurrowed,
+        eraIntact: e.eraIntact,
+        ewDisabled: e.ewDisabled,
+        isPreparingAttack: e.isPreparingAttack
+      });
+    });
+
+    const towers = this.towers.map((t) => ({
+      id: t.id,
+      defId: t.defId,
+      ownerId: t.ownerId,
+      ownerName: t.ownerName,
+      ownerColor: t.ownerColor,
+      col: t.col,
+      row: t.row,
+      level: t.level,
+      specialization: t.specialization,
+      hp: Math.ceil(t.hp),
+      maxHp: t.maxHp,
+      shield: Math.round(t.shield),
+      maxShield: Math.round(t.maxShield),
+      effectiveCost: t.effectiveCost,
+      totalInvested: t.totalInvested,
+      priority: t.priority,
+      turretAngle: Number(t.turretAngle.toFixed(2)),
+      totalDamage: Math.round(t.totalDamage),
+      kills: t.kills,
+      empDisabledTimer: Number(t.empDisabledTimer.toFixed(1)),
+      burnTimer: Number(t.burnTimer.toFixed(1)),
+      corrosionTimer: Number(t.corrosionTimer.toFixed(1)),
+      chillTimer: Number(t.chillTimer.toFixed(1))
+    }));
+
+    const ruins = this.destroyedRuins.map((r) => ({
+      col: r.col,
+      row: r.row,
+      defId: r.defId,
+      level: r.level,
+      specialization: r.specialization,
+      rebuildCost: r.rebuildCost
+    }));
+
+    const players = multiplayer.getPlayers().map((p) => ({
+      peerId: p.peerId,
+      budget: p.budget,
+      towerCount: p.towerCount,
+      maxTowers: p.maxTowers
+    }));
+
+    const lobby = multiplayer.getLobbyState();
+    multiplayer.broadcastSnapshot({
+      worldId: this.currentWorldId,
+      stageId: this.currentStageId,
+      fobHp: this.fobHp,
+      fobMaxHp: this.fobMaxHp,
+      currentWave: this.currentWave,
+      totalWaves: this.totalWaves,
+      waveActive: this.waveActive,
+      inIntermission: this.inIntermission,
+      wavePrepTimer: Number(this.wavePrepTimer.toFixed(1)),
+      totalKills: this.totalKills,
+      totalDamage: Math.round(this.totalDamage),
+      hasGlobalAesa: this.hasGlobalAesa,
+      timeScale: this.timeScale,
+      gameOver: this.gameOver,
+      victory: this.victory,
+      waveVotes: lobby.waveVotes,
+      requiredVotes: lobby.requiredVotes,
+      waveVoteTimer: Math.ceil(this.waveVoteTimer),
+      players,
+      airSupport: {
+        a10: { ...this.airSupport.a10 },
+        hellfire: { ...this.airSupport.hellfire },
+        b52: { ...this.airSupport.b52 }
+      },
+      towers,
+      enemies,
+      ruins
+    });
+  }
+
+  private handleClientCombatEvents(events: CombatNetEvent[]) {
+    if (!multiplayer.isClient() || !Array.isArray(events) || events.length === 0) return;
+    const playedSfx = new Set<string>();
+
+    for (const evt of events) {
+      if (evt.kind === 'FIRE') {
+        const tower = evt.towerId ? this.towers.find((t) => t.id === evt.towerId) : undefined;
+        const start = new THREE.Vector3(evt.wx ?? tower?.wx ?? 0, evt.wy ?? 1.2, evt.wz ?? tower?.wz ?? 0);
+        const end = new THREE.Vector3(evt.targetX ?? start.x, 0.7, evt.targetZ ?? start.z);
+        if (tower) {
+          tower.recoil = 0.22;
+          tower.muzzleFlashTimer = 0.06;
+          if (tower.rig.muzzleFlashMesh) tower.rig.muzzleFlashMesh.visible = true;
+          if (evt.targetX !== undefined && evt.targetZ !== undefined) {
+            tower.turretAngle = Math.atan2(evt.targetX - tower.wx, evt.targetZ - tower.wz);
+            if (tower.rig.turretPivot) tower.rig.turretPivot.rotation.y = tower.turretAngle;
+          }
+        }
+
+        const kind = evt.damageType || tower?.defId || 'm2_bunker';
+        let beamColor = 0xfef08a;
+        let sfxKey = 'mg50';
+        let duration = 0.12;
+        if (kind === 'railgun' || kind === 'helios_laser') {
+          beamColor = 0x38bdf8;
+          sfxKey = kind === 'railgun' ? 'railgun' : 'laser';
+          duration = 0.2;
+        } else if (kind === 'tesla_tower') {
+          beamColor = 0x60a5fa;
+          sfxKey = 'tesla';
+          duration = 0.16;
+        } else if (kind === 'sniper_tower') {
+          beamColor = 0xfef08a;
+          sfxKey = 'sniper';
+          duration = 0.15;
+        } else if (kind === 'flamethrower') {
+          beamColor = 0xf97316;
+          sfxKey = 'flame';
+          duration = 0.16;
+        } else if (kind === 'abrams_pit' || kind === 'howitzer') {
+          beamColor = 0xfb923c;
+          sfxKey = 'howitzer';
+          this.effects.spawnExplosion(start.x, start.y, start.z, 0.45, 0xfacc15, false);
+        } else if (kind === 'javelin' || kind === 'patriot' || kind === 'tos1_mlrs') {
+          beamColor = 0xfbbf24;
+          sfxKey = 'missile';
+          this.effects.spawnSmokePuff(start.x, start.y, start.z, 0xe2e8f0, 0.65);
+        } else if (kind === 'cryo_tower') {
+          beamColor = 0x7dd3fc;
+          sfxKey = 'cryo';
+        } else if (kind === 'toxic_tower') {
+          beamColor = 0x84cc16;
+          sfxKey = 'toxic';
+        } else if (kind === 'bushmaster') {
+          beamColor = 0xfb923c;
+          sfxKey = 'autocannon';
+        } else if (kind === 'phalanx') {
+          beamColor = 0x7dd3fc;
+          sfxKey = 'ciws';
+        } else if (kind === 'ballista' || kind === 'harpoon_tower') {
+          beamColor = 0xf59e0b;
+          sfxKey = 'ballista';
+        }
+
+        if (evt.targetX !== undefined && evt.targetZ !== undefined) {
+          this.addTransientBeam(start, end, beamColor, duration);
+          this.effects.spawnSparks(end.x, end.y, end.z, 2, beamColor);
+        } else {
+          this.effects.spawnSparks(start.x, start.y, start.z, 2, beamColor);
+        }
+
+        if (!playedSfx.has(sfxKey)) {
+          playedSfx.add(sfxKey);
+          audio.playShot(sfxKey);
+        }
+      } else if (evt.kind === 'EXPLODE') {
+        const ex = evt.wx ?? 0;
+        const ey = evt.wy ?? 0.5;
+        const ez = evt.wz ?? 0;
+        const sc = evt.scale ?? 1.0;
+        this.effects.spawnExplosion(ex, ey, ez, sc, evt.color ?? 0xf97316, true);
+        if (evt.damageType !== 'silent' && !playedSfx.has('explode')) {
+          playedSfx.add('explode');
+          audio.playExplosion(Math.min(1.6, sc));
+        }
+      } else if (evt.kind === 'EMP_PULSE') {
+        this.effects.spawnShockwave(evt.wx ?? 0, evt.wy ?? 0.3, evt.wz ?? 0, evt.scale ?? 12, evt.color ?? 0xc084fc);
+        if (!playedSfx.has('emp')) {
+          playedSfx.add('emp');
+          audio.playShot('emp');
+        }
+      }
+    }
+  }
+
+  private applyClientSnapshot(snap: any) {
+    if (!snap || !multiplayer.isClient()) return;
+    if (snap.worldId !== this.currentWorldId || snap.stageId !== this.currentStageId) {
+      this.loadStage(snap.worldId, snap.stageId, false, null);
+    }
+
+    this.fobHp = snap.fobHp;
+    this.fobMaxHp = snap.fobMaxHp;
+    this.currentWave = snap.currentWave;
+    this.totalWaves = snap.totalWaves;
+    this.waveActive = snap.waveActive;
+    this.inIntermission = snap.inIntermission;
+    this.wavePrepTimer = snap.wavePrepTimer;
+    this.totalKills = snap.totalKills;
+    this.totalDamage = snap.totalDamage;
+    this.hasGlobalAesa = snap.hasGlobalAesa;
+    this.timeScale = snap.timeScale;
+    this.waveVoteTimer = snap.waveVoteTimer || 0;
+    multiplayer.setWaveVoteTimer(this.waveVoteTimer);
+    if (snap.airSupport) {
+      this.airSupport.a10.timer = snap.airSupport.a10.timer;
+      this.airSupport.hellfire.timer = snap.airSupport.hellfire.timer;
+      this.airSupport.b52.timer = snap.airSupport.b52.timer;
+    }
+
+    if (Array.isArray(snap.players)) {
+      for (const sp of snap.players) {
+        const localP = multiplayer.getPlayer(sp.peerId);
+        if (localP) {
+          localP.budget = sp.budget;
+          localP.towerCount = sp.towerCount;
+          localP.maxTowers = sp.maxTowers;
+        }
+        if (sp.peerId === multiplayer.localPeerId) {
+          this.budget = sp.budget;
+        }
+      }
+      multiplayer.emitLobbyUpdate();
+    }
+
+    // Reconcile towers
+    const snapTowers = snap.towers || [];
+    const seenIds = new Set<string>();
+    for (const st of snapTowers) {
+      seenIds.add(st.id);
+      let existing = this.towers.find((t) => t.id === st.id);
+      if (!existing) {
+        existing = this.spawnTowerOnGrid({
+          id: st.id,
+          col: st.col,
+          row: st.row,
+          towerId: st.defId,
+          level: st.level,
+          specialization: st.specialization ?? null,
+          hp: st.hp,
+          maxHp: st.maxHp,
+          effectiveCost: st.effectiveCost,
+          totalInvested: st.totalInvested,
+          priority: st.priority,
+          turretAngle: st.turretAngle,
+          totalDamage: st.totalDamage,
+          kills: st.kills,
+          ownerId: st.ownerId,
+          ownerName: st.ownerName,
+          ownerColor: st.ownerColor
+        });
+        this.rerouteActiveGroundEnemies();
+      } else {
+        const rigChanged = existing.level !== st.level || existing.specialization !== st.specialization;
+        existing.level = st.level;
+        existing.specialization = st.specialization ?? null;
+        existing.hp = st.hp;
+        existing.maxHp = st.maxHp;
+        existing.shield = st.shield || 0;
+        existing.maxShield = st.maxShield || 0;
+        existing.priority = st.priority;
+        existing.turretAngle = st.turretAngle;
+        existing.totalDamage = st.totalDamage;
+        existing.kills = st.kills;
+        existing.empDisabledTimer = st.empDisabledTimer || 0;
+        existing.burnTimer = st.burnTimer || 0;
+        existing.corrosionTimer = st.corrosionTimer || 0;
+        existing.chillTimer = st.chillTimer || 0;
+        if (existing.rig.turretPivot) {
+          existing.rig.turretPivot.rotation.y = existing.turretAngle;
+        }
+        if (rigChanged) {
+          this.rebuildTowerRigVisual(existing);
+        }
+      }
+    }
+    for (const t of [...this.towers]) {
+      if (!seenIds.has(t.id)) {
+        this.removeTowerFromMap(t);
+      }
+    }
+
+    // Reconcile ruins
+    const snapRuins = snap.ruins || [];
+    if (snapRuins.length !== this.destroyedRuins.length) {
+      for (const r of this.destroyedRuins) this.scene.remove(r.mesh);
+      this.destroyedRuins = [];
+      for (const sr of snapRuins) {
+        const { x: wx, z: wz } = cellToWorldCenter(sr.col, sr.row);
+        const mesh = new THREE.Mesh(this.ruinGeo, this.ruinMat);
+        mesh.position.set(wx, 0.22, wz);
+        this.scene.add(mesh);
+        this.destroyedRuins.push({
+          col: sr.col,
+          row: sr.row,
+          wx,
+          wz,
+          defId: sr.defId,
+          level: sr.level,
+          specialization: sr.specialization,
+          rebuildCost: sr.rebuildCost,
+          mesh,
+          life: 0
+        });
+      }
+    }
+
+    // Reconcile enemies with smooth interpolation targets
+    const snapEnemies = snap.enemies || [];
+    const activeIds = new Set<number>();
+    const activeById = new Map<number, EnemyEntity>();
+    this.enemyPool.forEachActive((obj) => {
+      const e = obj as EnemyEntity;
+      activeById.set(e.id, e);
+    });
+
+    for (const se of snapEnemies) {
+      activeIds.add(se.id);
+      let e = activeById.get(se.id);
+      if (!e) {
+        const spawned = this.spawnEnemy(se.type, 0, { x: se.x, y: se.y });
+        if (spawned) {
+          spawned.id = se.id;
+          spawned.wx = se.wx;
+          spawned.wy = se.wy;
+          spawned.wz = se.wz;
+          spawned.angle = se.angle;
+          spawned.rig?.root.position.set(se.wx, 0, se.wz);
+          e = spawned;
+        }
+      }
+      if (e) {
+        e.x = se.x;
+        e.y = se.y;
+        e.hp = se.hp;
+        e.maxHp = se.maxHp;
+        e.shield = se.shield;
+        e.maxShield = se.maxShield;
+        e.isStealth = se.isStealth;
+        e.stealthRevealed = se.stealthRevealed;
+        e.isBurrowed = se.isBurrowed;
+        e.eraIntact = se.eraIntact;
+        e.ewDisabled = se.ewDisabled;
+        e.isPreparingAttack = se.isPreparingAttack;
+        this.updateEnemyHealthBar(e);
+        this.clientEnemyTargets.set(se.id, {
+          wx: se.wx,
+          wy: se.wy,
+          wz: se.wz,
+          angle: se.angle
+        });
+      }
+    }
+    for (const [id, e] of activeById) {
+      if (!activeIds.has(id)) {
+        this.clientEnemyTargets.delete(id);
+        this.enemyPool.release(e);
+      }
+    }
+
+    if (snap.gameOver && !this.gameOver) {
+      this.gameOver = true;
+      this.victory = !!snap.victory;
+      if (this.victory) {
+        const baseWB = this.stageConfig.clearBonusWB || 60;
+        const coopBonusWB = Math.round(baseWB * (multiplayer.getConnectedPlayerCount() > 1 ? 1.25 : 1));
+        if (!multiplayer.isHostSignalLost()) {
+          this.sessionWB += coopBonusWB;
+          saveManager.markStageCompleted(this.currentWorldId, this.currentStageId, coopBonusWB);
+        }
+        bus.emit('hud:gameover', {
+          victory: true,
+          wave: this.currentWave,
+          totalWaves: this.totalWaves,
+          kills: this.totalKills,
+          damage: this.totalDamage,
+          wbEarned: this.sessionWB,
+          newlyUnlocked: null,
+          worldId: this.currentWorldId,
+          stageId: this.currentStageId,
+          coopBonusPercent: multiplayer.getConnectedPlayerCount() > 1 ? 25 : 0
+        });
+      } else {
+        bus.emit('hud:gameover', {
+          victory: false,
+          wave: this.currentWave,
+          totalWaves: this.totalWaves,
+          kills: this.totalKills,
+          damage: this.totalDamage,
+          wbEarned: this.sessionWB,
+          newlyUnlocked: null,
+          worldId: this.currentWorldId,
+          stageId: this.currentStageId
+        });
+      }
+    }
+
+    this.emitFullHudSync(snap.waveVotes, snap.requiredVotes);
+    if (this.selectedTower) {
+      bus.emit('hud:selectedTower', this.serializeTower(this.selectedTower));
+    }
+  }
+
   saveCurrentMissionSnapshot(forceEvenIfEmpty = false) {
-    if (this.gameOver) return;
+    if (this.gameOver || multiplayer.isHostSignalLost()) return;
     if (!forceEvenIfEmpty && this.towers.length === 0 && this.currentWave === 0) return;
 
     const completedWave = this.waveActive ? Math.max(0, this.currentWave - 1) : this.currentWave;
@@ -1114,6 +2160,7 @@ export class Battlefield3D {
       col: t.col,
       row: t.row,
       level: t.level,
+      specialization: t.specialization,
       hp: Math.ceil(t.hp),
       maxHp: t.maxHp,
       effectiveCost: t.effectiveCost,
@@ -1173,6 +2220,7 @@ export class Battlefield3D {
         row: st.row,
         towerId: st.defId,
         level: st.level,
+        specialization: st.specialization ?? null,
         hp: st.hp,
         maxHp: st.maxHp,
         effectiveCost: st.effectiveCost,
@@ -1211,13 +2259,29 @@ export class Battlefield3D {
     for (const f of this.activeFlyovers) {
       this.scene.remove(f.jet);
     }
+    for (const m of this.activeMines) {
+      this.scene.remove(m.mesh);
+    }
+    for (const r of this.destroyedRuins) {
+      this.scene.remove(r.mesh);
+    }
+    for (const tb of this.transientBeams) {
+      this.scene.remove(tb.line);
+      tb.line.geometry.dispose();
+    }
 
     this.bossProjectiles = [];
     this.fireZones = [];
     this.activeFlyovers = [];
+    this.activeMines = [];
+    this.destroyedRuins = [];
+    this.transientBeams = [];
     this.pendingShots = [];
     this.towers = [];
     this.towerGrid = Array.from({ length: GRID_ROWS }, () => new Array(GRID_COLS).fill(null));
+    this.selectedEnemy = null;
+    this.hoveredEnemy = null;
+    this.extractorCapWarned = false;
 
     this.pathfinder.loadStageLayout(this.stageConfig);
 
@@ -1228,21 +2292,39 @@ export class Battlefield3D {
     }
     this.diorama = createBattlefieldDiorama3D(
       this.pathfinder.baseTerrain,
-      this.worldConfig.biome as WorldBiome,
+      (this.stageConfig.biome || this.worldConfig.biome) as WorldBiome,
       this.stageConfig.spawnPoints,
-      this.stageConfig.fobPoint
+      this.stageConfig.fobPoint,
+      {
+        restrictedCells: this.stageConfig.restrictedCells,
+        iceCells: this.stageConfig.iceCells,
+        fogCells: this.stageConfig.fogCells,
+        toxicCells: this.stageConfig.toxicCells,
+        lavaCells: this.stageConfig.lavaCells
+      }
     );
     this.scene.add(this.diorama.group);
 
-    this.scene.background = new THREE.Color(this.worldConfig.skyColor);
-    this.scene.fog = new THREE.FogExp2(this.worldConfig.fogColor, 0.0038);
-    this.sunLight.color.setHex(this.worldConfig.sunColor);
-    this.rimLight.color.setHex(this.worldConfig.rimColor);
+    const skyColor = this.stageConfig.skyColor ?? this.worldConfig.skyColor;
+    const fogColor = this.stageConfig.fogColor ?? this.worldConfig.fogColor;
+    const sunColor = this.stageConfig.sunColor ?? this.worldConfig.sunColor;
+    const rimColor = this.stageConfig.rimColor ?? this.worldConfig.rimColor;
+    this.scene.background = new THREE.Color(skyColor);
+    this.scene.fog = new THREE.FogExp2(fogColor, this.stageConfig.fogCells?.length ? 0.0046 : 0.0038);
+    this.sunLight.color.setHex(sunColor);
+    this.rimLight.color.setHex(rimColor);
 
-    this.budget = this.stageConfig.startingBudget || 750;
+    const startingBudget = this.stageConfig.startingBudget || 750;
+    const localPlayer = multiplayer.isActive() ? multiplayer.getLocalPlayer() : null;
+    this.budget = localPlayer ? localPlayer.budget : startingBudget;
     this.sessionWB = 0;
-    this.fobHp = 20;
-    this.fobMaxHp = 20;
+    this.fobMaxHp = multiplayer.getFobMaxHp();
+    this.fobHp = this.fobMaxHp;
+    this.waveVoteTimer = 0;
+    multiplayer.setWaveVoteTimer(0);
+    this.armedPingType = null;
+    bus.emit('hud:pingArmed', null);
+    this.clearCoopVisuals();
     this.currentWave = 0;
     this.totalWaves = this.stageConfig.waves.length;
     this.waveActive = false;
@@ -1285,24 +2367,36 @@ export class Battlefield3D {
     return Math.max(10, Math.round(def.cost * mults.costMult));
   }
 
-  private getEffectiveTowerMaxHp(towerId: string, level: number): number {
+  private getEffectiveTowerMaxHp(
+    towerId: string,
+    level: number,
+    specialization: 'A' | 'B' | null = null,
+    hpBuffBonus = 0
+  ): number {
     const def = (TOWER_DEFINITIONS as any)[towerId];
     if (!def) return 500;
-    const spec = def.levels[level - 1];
+    const spec = getTowerLevelSpec(def, level, specialization);
     const baseHp = spec?.maxHp || def.maxHp || 500;
     const levelMult = spec?.maxHp ? 1 : 1 + (level - 1) * 0.35;
     const mults = saveManager.getTechMultipliers(towerId);
-    return Math.round(baseHp * levelMult * mults.hpMult);
+    return Math.round(baseHp * levelMult * mults.hpMult * (1 + hpBuffBonus));
   }
 
   private getEffectiveSpec(tower: TowerEntity) {
-    const spec = tower.def.levels[tower.level - 1];
+    const spec = getTowerLevelSpec(tower.def, tower.level, tower.specialization);
     const mults = saveManager.getTechMultipliers(tower.defId);
+    const chillMult = tower.chillTimer > 0 ? Math.max(0.4, 1 - (tower.chillSlow || 0.3)) : 1;
+    const fogRangeMult = tower.fogDebuff ? 0.78 : 1;
+    const effectiveRangeMult = Math.max(0.5, (1 + (tower.allyRangeBuff || 0)) * fogRangeMult);
+    const effectiveRateMult = Math.max(0.35, mults.fireRateMult * (1 + (tower.allyFireRateBuff || 0)) * chillMult);
     return {
       ...spec,
+      range: Math.round((spec.range || 0) * effectiveRangeMult),
       damage: Math.round((spec.damage || 0) * mults.damageMult),
-      fireRate: (spec.fireRate || 0) * mults.fireRateMult,
-      burnDps: spec.burnDps ? Math.round(spec.burnDps * mults.damageMult) : 0
+      fireRate: (spec.fireRate || 0) * effectiveRateMult,
+      critChance: Math.min(0.85, (spec.critChance || 0) + (tower.allyCritBonus || 0)),
+      burnDps: spec.burnDps ? Math.round(spec.burnDps * mults.damageMult) : 0,
+      poisonDps: spec.poisonDps ? Math.round(spec.poisonDps * mults.damageMult) : 0
     };
   }
 
@@ -1319,10 +2413,22 @@ export class Battlefield3D {
       return;
     }
 
+    if (multiplayer.isActive() && !multiplayer.getLoadout().includes(towerId)) {
+      const def = (TOWER_DEFINITIONS as any)[towerId];
+      this.pushRadio(
+        `${def?.shortName || towerId} não está no seu Deck Tático Co-op (6 torres)!`,
+        'warn'
+      );
+      audio.playUi('error');
+      return;
+    }
+
     if (this.activeTool?.kind === 'build' && this.activeTool.towerId === towerId) {
       this.cancelActiveTool();
       return;
     }
+    this.armedPingType = null;
+    bus.emit('hud:pingArmed', null);
     this.activeTool = { kind: 'build', towerId };
     this.controls.enableRotate = true;
     this.selectTower(null);
@@ -1351,11 +2457,13 @@ export class Battlefield3D {
       audio.playUi('error');
       return;
     }
-    if (this.budget < sup.cost) {
+    if (this.getActorBudget(multiplayer.localPeerId) < sup.cost) {
       this.pushRadio(`Orçamento insuficiente ($${sup.cost} necessário).`, 'warn');
       audio.playUi('error');
       return;
     }
+    this.armedPingType = null;
+    bus.emit('hud:pingArmed', null);
     this.activeTool = { kind: 'support', supportId };
     this.controls.enableRotate = supportId !== 'a10';
     this.selectTower(null);
@@ -1365,6 +2473,7 @@ export class Battlefield3D {
 
   cancelActiveTool() {
     this.activeTool = null;
+    this.armedPingType = null;
     this.strafeDragStart = null;
     this.lastCanPlace = null;
     this.controls.enableRotate = true;
@@ -1372,10 +2481,15 @@ export class Battlefield3D {
     this.clearGroup(this.previewRouteGroup);
     this.clearGroup(this.supportReticleGroup);
     bus.emit('hud:tool', null);
+    bus.emit('hud:pingArmed', null);
   }
 
-  selectTower(tower: TowerEntity | null) {
+  selectTower(tower: TowerEntity | null, clearEnemy = true) {
     this.selectedTower = tower;
+    if (clearEnemy && this.selectedEnemy) {
+      this.selectedEnemy = null;
+      bus.emit('hud:selectedEnemy', null);
+    }
     if (tower) {
       this.activeTool = null;
       this.controls.enableRotate = true;
@@ -1383,9 +2497,54 @@ export class Battlefield3D {
       this.clearGroup(this.previewRouteGroup);
       this.clearGroup(this.supportReticleGroup);
       bus.emit('hud:tool', null);
+      bus.emit('hud:selectedEnemy', null);
     }
     this.rebuildSelectedTowerOverlay();
     bus.emit('hud:selectedTower', this.serializeTower(tower));
+  }
+
+  selectEnemy(enemy: EnemyEntity | null) {
+    this.selectedEnemy = enemy;
+    if (enemy) {
+      this.selectTower(null, false);
+      this.rebuildSelectedTowerOverlay();
+      bus.emit('hud:selectedEnemy', this.serializeEnemy(enemy));
+    } else {
+      bus.emit('hud:selectedEnemy', null);
+    }
+  }
+
+  inspectEnemyDefinition(enemyType: string) {
+    const def = (ENEMY_DEFINITIONS as any)[enemyType];
+    if (!def) return;
+    this.selectedEnemy = null;
+    this.selectTower(null, false);
+    audio.playUi('click');
+    bus.emit('hud:selectedEnemy', {
+      id: 0,
+      isPreview: true,
+      type: enemyType,
+      name: def.name,
+      category: def.category || 'ground',
+      domain: def.domain || 'ground',
+      armorClass: def.armorClass || 'unarmored',
+      hp: def.maxHp,
+      maxHp: def.maxHp,
+      shield: def.maxShield || 0,
+      maxShield: def.maxShield || 0,
+      speed: def.speed,
+      reward: def.reward,
+      fobDamage: def.fobDamage,
+      isStealth: !!def.isStealth,
+      stealthRevealed: false,
+      isBurrowed: !!def.canBurrow,
+      isBoss: !!def.isBoss,
+      weaponName: def.weaponName || null,
+      towerAttack: def.towerAttack || null,
+      resistances: def.resistances || {},
+      aiBehavior: def.aiBehavior || null,
+      roleSummary: def.roleSummary || ''
+    });
   }
 
   private evaluatePlacementPreview() {
@@ -1406,10 +2565,12 @@ export class Battlefield3D {
   }
 
   private spawnTowerOnGrid(opts: {
+    id?: string;
     col: number;
     row: number;
     towerId: string;
     level: number;
+    specialization?: 'A' | 'B' | null;
     hp: number;
     maxHp: number;
     effectiveCost: number;
@@ -1418,8 +2579,16 @@ export class Battlefield3D {
     turretAngle: number;
     totalDamage: number;
     kills: number;
+    ownerId?: string;
+    ownerName?: string;
+    ownerColor?: string;
   }): TowerEntity {
     const { col, row, towerId, level } = opts;
+    const specialization = opts.specialization ?? null;
+    const ownerId = opts.ownerId || (multiplayer.isActive() ? multiplayer.localPeerId : 'local');
+    const pInfo = multiplayer.getPlayer(ownerId);
+    const ownerName = opts.ownerName || pInfo?.callsign || multiplayer.getCallsign();
+    const ownerColor = opts.ownerColor || pInfo?.color || SQUAD_COLORS[0];
     const def = (TOWER_DEFINITIONS as any)[towerId];
     this.pathfinder.placeStructure(col, row, !!def.isBarrier);
 
@@ -1427,9 +2596,23 @@ export class Battlefield3D {
     const cy = row * TILE_SIZE + TILE_SIZE * 0.5;
     const { x: wx, z: wz } = cellToWorldCenter(col, row);
 
-    const rig = createTowerModel3D(towerId, level);
+    const rig = createTowerModel3D(towerId, level, specialization);
     rig.root.position.set(wx, 0, wz);
     this.scene.add(rig.root);
+
+    const ownerRingMesh = new THREE.Mesh(
+      this.ownerRingGeo,
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(ownerColor),
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: multiplayer.isActive() ? 0.85 : 0.45,
+        depthWrite: false
+      })
+    );
+    ownerRingMesh.rotation.x = -Math.PI / 2;
+    ownerRingMesh.position.set(wx, 0.06, wz);
+    this.scene.add(ownerRingMesh);
 
     const hpEl = document.createElement('div');
     hpEl.className = 'tower-hp-bar hidden';
@@ -1445,9 +2628,13 @@ export class Battlefield3D {
     this.overlayEl.appendChild(hpEl);
 
     const tower: TowerEntity = {
-      id: `${towerId}_${Date.now()}_${Math.random()}`,
+      id: opts.id || `${towerId}_${Date.now()}_${Math.random()}`,
       defId: towerId,
       def,
+      ownerId,
+      ownerName,
+      ownerColor,
+      ownerRingMesh,
       col,
       row,
       x: cx,
@@ -1455,10 +2642,13 @@ export class Battlefield3D {
       wx,
       wz,
       level,
+      specialization,
       effectiveCost: opts.effectiveCost,
       totalInvested: opts.totalInvested,
       hp: Math.min(opts.maxHp, opts.hp),
       maxHp: opts.maxHp,
+      shield: 0,
+      maxShield: 0,
       priority: opts.priority,
       turretAngle: opts.turretAngle,
       cooldownTimer: 0,
@@ -1466,9 +2656,22 @@ export class Battlefield3D {
       empDisabledTimer: 0,
       burnTimer: 0,
       burnDps: 0,
+      corrosionTimer: 0,
+      corrosionDps: 0,
+      chillTimer: 0,
+      chillSlow: 0,
       smokeTimer: 0,
       trophyTimer: 0,
       interceptTimer: 0,
+      incomeAccum: 0,
+      rebuildCooldownTimer: 0,
+      allyRangeBuff: 0,
+      allyFireRateBuff: 0,
+      allyCritBonus: 0,
+      allyKillBonus: 0,
+      allyHpBonus: 0,
+      repairCostDiscount: 0,
+      fogDebuff: false,
       laserTargetId: 0,
       laserFocusTime: 0,
       laserTickAccum: 0,
@@ -1487,11 +2690,18 @@ export class Battlefield3D {
       rig.turretPivot.rotation.y = tower.turretAngle;
     }
 
-    if (towerId === 'ew_crew' || towerId === 'iron_dome') {
+    const pulseColors: Record<string, number> = {
+      ew_crew: 0xa855f7,
+      iron_dome: 0x2dd4bf,
+      eng_workshop: 0x38bdf8,
+      energy_extractor: 0xfacc15,
+      cryo_tower: 0x7dd3fc
+    };
+    if (pulseColors[towerId] !== undefined) {
       const pulseMesh = new THREE.Mesh(
         this.ewPulseGeo,
         new THREE.MeshBasicMaterial({
-          color: towerId === 'iron_dome' ? 0x2dd4bf : 0xa855f7,
+          color: pulseColors[towerId],
           side: THREE.DoubleSide,
           transparent: true,
           opacity: 0.35,
@@ -1509,35 +2719,69 @@ export class Battlefield3D {
     return tower;
   }
 
-  tryPlaceTower(col: number, row: number, towerId: string) {
+  tryPlaceTower(col: number, row: number, towerId: string, actorId = multiplayer.localPeerId) {
     const def = (TOWER_DEFINITIONS as any)[towerId];
     if (!def) return;
-    if (!saveManager.isTowerUnlocked(towerId)) return;
+    if (actorId === multiplayer.localPeerId && !saveManager.isTowerUnlocked(towerId)) return;
+
+    const maxTowers = multiplayer.isActive()
+      ? getMaxTowersPerPlayer(multiplayer.getConnectedPlayerCount())
+      : 30;
+    const actorTowerCount = this.towers.filter((t) => t.ownerId === actorId).length;
+    if (actorTowerCount >= maxTowers) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Limite de torres atingido (${actorTowerCount}/${maxTowers}). Venda ou aprimore torres existentes!`, 'warn');
+        audio.playUi('error');
+      }
+      return;
+    }
 
     const effectiveCost = this.getEffectiveTowerCost(towerId);
-    if (this.budget < effectiveCost) {
-      this.pushRadio(`Orçamento insuficiente para ${def.shortName} ($${effectiveCost}).`, 'warn');
-      audio.playUi('error');
+    if (this.getActorBudget(actorId) < effectiveCost) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Orçamento insuficiente para ${def.shortName} ($${effectiveCost}).`, 'warn');
+        audio.playUi('error');
+      }
       return;
     }
 
     const groundEnemies = this.enemyPool.active.filter((e: EnemyEntity) => e.domain === 'ground');
     const check = this.pathfinder.canPlaceAt(col, row, groundEnemies);
     if (!check.ok) {
-      this.pushRadio(check.reason, 'alert');
-      const { x, z } = cellToWorldCenter(col, row);
-      this.spawnFloatingText(x, 2.2, z, 'ROTA BLOQUEADA!', '#ef4444');
-      audio.playUi('error');
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(check.reason, 'alert');
+        const { x, z } = cellToWorldCenter(col, row);
+        this.spawnFloatingText(x, 2.2, z, 'ROTA BLOQUEADA!', '#ef4444');
+        audio.playUi('error');
+      }
       return;
     }
 
-    this.budget -= effectiveCost;
-    const maxHp = this.getEffectiveTowerMaxHp(towerId, 1);
+    if (multiplayer.isClient() && actorId === multiplayer.localPeerId) {
+      multiplayer.sendCombatCommand('CMD_BUILD_TOWER', { towerType: towerId, col, row });
+      audio.playUi('click');
+      if (!def.isBarrier && !this.shiftHeld) {
+        this.cancelActiveTool();
+      }
+      return;
+    }
+
+    // Clear any leftover ruin on this tile
+    const ruinIdx = this.destroyedRuins.findIndex((r) => r.col === col && r.row === row);
+    if (ruinIdx !== -1) {
+      this.scene.remove(this.destroyedRuins[ruinIdx].mesh);
+      this.destroyedRuins.splice(ruinIdx, 1);
+    }
+
+    this.addActorBudget(actorId, -effectiveCost);
+    const maxHp = this.getEffectiveTowerMaxHp(towerId, 1, null);
+    const ownerInfo = multiplayer.getPlayer(actorId);
     const tower = this.spawnTowerOnGrid({
       col,
       row,
       towerId,
       level: 1,
+      specialization: null,
       hp: maxHp,
       maxHp,
       effectiveCost,
@@ -1545,20 +2789,26 @@ export class Battlefield3D {
       priority: def.defaultPriority,
       turretAngle: Math.PI / 2,
       totalDamage: 0,
-      kills: 0
+      kills: 0,
+      ownerId: actorId,
+      ownerName: ownerInfo?.callsign || multiplayer.getCallsign(),
+      ownerColor: ownerInfo?.color || SQUAD_COLORS[0]
     });
 
+    this.syncHostPlayerTowerCounts();
     this.refreshGlobalBuffs();
     this.rerouteActiveGroundEnemies();
     this.rebuildActiveRouteLines();
     this.evaluatePlacementPreview();
-    this.saveCurrentMissionSnapshot();
+    if (!multiplayer.isActive()) {
+      this.saveCurrentMissionSnapshot();
+    }
 
     audio.playUi('build');
-    this.spawnFloatingText(tower.wx, 2.5, tower.wz, `-$${effectiveCost}`, '#facc15');
+    this.spawnFloatingText(tower.wx, 2.5, tower.wz, `-$${effectiveCost}`, ownerInfo?.color || '#facc15');
     this.emitFullHudSync();
 
-    if (!def.isBarrier && !this.shiftHeld) {
+    if (actorId === multiplayer.localPeerId && !def.isBarrier && !this.shiftHeld) {
       this.cancelActiveTool();
       this.selectTower(tower);
     }
@@ -1567,22 +2817,125 @@ export class Battlefield3D {
   upgradeSelectedTower() {
     const t = this.selectedTower;
     if (!t || t.def.isBarrier) return;
-    const nextSpec = t.def.levels[t.level];
-    if (!nextSpec) return;
-
-    if (this.budget < nextSpec.upgradeCost) {
-      this.pushRadio(`Falta orçamento para upgrade ($${nextSpec.upgradeCost}).`, 'warn');
+    if (!multiplayer.canModifyTower(t.ownerId, multiplayer.localPeerId)) {
+      this.pushRadio(`Apenas ${t.ownerName} pode aprimorar esta torre!`, 'warn');
       audio.playUi('error');
+      return;
+    }
+    if (multiplayer.isClient()) {
+      multiplayer.sendCombatCommand('CMD_UPGRADE_TOWER', { towerId: t.id });
+      audio.playUi('click');
+      return;
+    }
+    this.upgradeTowerByActor(t, multiplayer.localPeerId);
+  }
+
+  private upgradeTowerByActor(t: TowerEntity, actorId: string) {
+    if (!t || t.def.isBarrier) return;
+    if (!multiplayer.canModifyTower(t.ownerId, actorId)) return;
+    const opt = getTowerUpgradeOptions(t.def, t.level, t.specialization);
+    if (!opt) return;
+    if (opt.kind === 'specialize') {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Escolha a Especialização A ou B no inspetor de ${t.def.shortName}.`, 'info');
+        audio.playUi('click');
+        bus.emit('hud:selectedTower', this.serializeTower(t));
+      }
+      return;
+    }
+
+    if (this.getActorBudget(actorId) < opt.cost) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Falta orçamento para upgrade ($${opt.cost}).`, 'warn');
+        audio.playUi('error');
+      }
       return;
     }
 
     const oldRatio = t.maxHp > 0 ? t.hp / t.maxHp : 1;
-    this.budget -= nextSpec.upgradeCost;
-    t.totalInvested += nextSpec.upgradeCost;
-    t.level += 1;
-    t.maxHp = this.getEffectiveTowerMaxHp(t.defId, t.level);
+    this.addActorBudget(actorId, -opt.cost);
+    t.totalInvested += opt.cost;
+    t.level = opt.nextLevel;
+    t.maxHp = this.getEffectiveTowerMaxHp(t.defId, t.level, t.specialization, t.allyHpBonus);
     t.hp = Math.min(t.maxHp, Math.round(t.maxHp * Math.max(oldRatio, 0.55) + 150));
 
+    this.rebuildTowerRigVisual(t);
+
+    this.refreshGlobalBuffs();
+    this.rebuildSelectedTowerOverlay();
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot();
+    audio.playUi('build');
+    this.spawnFloatingText(t.wx, 3.2, t.wz, `UPGRADE NV${t.level}!`, '#38bdf8');
+    if (actorId === multiplayer.localPeerId) {
+      this.pushRadio(`${t.def.shortName} promovida para ${opt.name}.`, 'info');
+    }
+    if (this.selectedTower === t) {
+      bus.emit('hud:selectedTower', this.serializeTower(t));
+    }
+    this.emitFullHudSync();
+  }
+
+  specializeSelectedTower(branch: 'A' | 'B') {
+    const t = this.selectedTower;
+    if (!t || t.def.isBarrier || t.specialization) return;
+    if (!multiplayer.canModifyTower(t.ownerId, multiplayer.localPeerId)) {
+      this.pushRadio(`Apenas ${t.ownerName} pode especializar esta torre!`, 'warn');
+      audio.playUi('error');
+      return;
+    }
+    if (multiplayer.isClient()) {
+      multiplayer.sendCombatCommand('CMD_SPECIALIZE_TOWER', { towerId: t.id, branch });
+      audio.playUi('click');
+      return;
+    }
+    this.specializeTowerByActor(t, branch, multiplayer.localPeerId);
+  }
+
+  private specializeTowerByActor(t: TowerEntity, branch: 'A' | 'B', actorId: string) {
+    if (!t || t.def.isBarrier || t.specialization) return;
+    if (!multiplayer.canModifyTower(t.ownerId, actorId)) return;
+    const opt = getTowerUpgradeOptions(t.def, t.level, t.specialization);
+    if (!opt || opt.kind !== 'specialize') return;
+    const branchData = opt.branches?.[branch];
+    if (!branchData) return;
+
+    if (this.getActorBudget(actorId) < branchData.cost) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Falta orçamento para especialização ${branch} ($${branchData.cost}).`, 'warn');
+        audio.playUi('error');
+      }
+      return;
+    }
+
+    const oldRatio = t.maxHp > 0 ? t.hp / t.maxHp : 1;
+    this.addActorBudget(actorId, -branchData.cost);
+    t.totalInvested += branchData.cost;
+    t.specialization = branch;
+    t.level = opt.nextLevel;
+    t.maxHp = this.getEffectiveTowerMaxHp(t.defId, t.level, branch, t.allyHpBonus);
+    t.hp = Math.min(t.maxHp, Math.round(t.maxHp * Math.max(oldRatio, 0.65) + 220));
+
+    this.rebuildTowerRigVisual(t);
+
+    this.refreshGlobalBuffs();
+    this.rebuildSelectedTowerOverlay();
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot();
+    audio.playUi('build');
+    this.spawnFloatingText(
+      t.wx,
+      3.4,
+      t.wz,
+      `ESPECIALIZAÇÃO ${branch}!`,
+      branch === 'A' ? '#38bdf8' : '#f59e0b'
+    );
+    this.pushRadio(`${t.def.shortName} (${t.ownerName}) especializada: ${branchData.name}.`, 'good');
+    if (this.selectedTower === t) {
+      bus.emit('hud:selectedTower', this.serializeTower(t));
+    }
+    this.emitFullHudSync();
+  }
+
+  private rebuildTowerRigVisual(t: TowerEntity) {
     this.scene.remove(t.rig.root);
     if (t.laserLine) {
       this.scene.remove(t.laserLine);
@@ -1593,66 +2946,224 @@ export class Battlefield3D {
     }
     t.laserBeams = [];
 
-    t.rig = createTowerModel3D(t.defId, t.level);
+    t.rig = createTowerModel3D(t.defId, t.level, t.specialization);
     t.rig.root.position.set(t.wx, 0, t.wz);
     if (t.rig.turretPivot) {
       t.rig.turretPivot.rotation.y = t.turretAngle;
     }
     this.scene.add(t.rig.root);
-
-    this.refreshGlobalBuffs();
-    this.rebuildSelectedTowerOverlay();
-    this.saveCurrentMissionSnapshot();
-    audio.playUi('build');
-    this.spawnFloatingText(t.wx, 3.2, t.wz, `UPGRADE NV${t.level}!`, '#38bdf8');
-    this.pushRadio(`${t.def.shortName} promovida para ${nextSpec.name}.`, 'info');
-    bus.emit('hud:selectedTower', this.serializeTower(t));
-    this.emitFullHudSync();
   }
 
   getRepairCost(t: TowerEntity): number {
     if (!t || t.hp >= t.maxHp) return 0;
     const missingRatio = (t.maxHp - t.hp) / t.maxHp;
-    return Math.max(10, Math.ceil(missingRatio * t.effectiveCost * 0.5));
+    const discount = 1 - Math.min(0.6, t.repairCostDiscount || 0);
+    return Math.max(10, Math.ceil(missingRatio * t.effectiveCost * 0.5 * discount));
   }
 
   repairSelectedTower() {
     const t = this.selectedTower;
     if (!t) return;
-    if (t.hp >= t.maxHp) {
-      this.pushRadio(`${t.def.shortName} já está com integridade máxima.`, 'info');
+    if (multiplayer.isClient()) {
+      multiplayer.sendCombatCommand('CMD_REPAIR_TOWER', { towerId: t.id });
+      audio.playUi('click');
+      return;
+    }
+    this.repairTowerByActor(t, multiplayer.localPeerId);
+  }
+
+  private repairTowerByActor(t: TowerEntity, actorId: string) {
+    if (!t) return;
+    if (t.hp >= t.maxHp && t.burnTimer <= 0 && t.corrosionTimer <= 0 && t.chillTimer <= 0) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`${t.def.shortName} já está com integridade máxima.`, 'info');
+      }
       return;
     }
     const cost = this.getRepairCost(t);
-    if (this.budget < cost) {
-      this.pushRadio(`Orçamento insuficiente para reparar ($${cost} necessário).`, 'warn');
-      audio.playUi('error');
+    if (this.getActorBudget(actorId) < cost) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Orçamento insuficiente para reparar ($${cost} necessário).`, 'warn');
+        audio.playUi('error');
+      }
       return;
     }
 
-    this.budget -= cost;
+    this.addActorBudget(actorId, -cost);
     t.hp = t.maxHp;
     t.burnTimer = 0;
-    this.saveCurrentMissionSnapshot();
+    t.corrosionTimer = 0;
+    t.chillTimer = 0;
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot();
     audio.playUi('repair');
     this.effects.spawnSparks(t.wx, 1.4, t.wz, 6, 0x38bdf8);
-    this.spawnFloatingText(t.wx, 2.8, t.wz, `REPARADO -$${cost}`, '#38bdf8');
-    bus.emit('hud:selectedTower', this.serializeTower(t));
+    this.spawnFloatingText(t.wx, 2.8, t.wz, cost > 0 ? `REPARADO -$${cost}` : 'LIMPO!', '#38bdf8');
+    if (multiplayer.isActive() && t.ownerId !== actorId) {
+      const helper = multiplayer.getPlayer(actorId)?.callsign || 'ALIADO';
+      const msg = `🔧 ${helper} reparou ${t.def.shortName} de ${t.ownerName} (-$${cost})!`;
+      this.pushRadio(msg, 'good');
+      multiplayer.broadcastRadio(msg, 'good', this.currentWave);
+    }
+    if (this.selectedTower === t) {
+      bus.emit('hud:selectedTower', this.serializeTower(t));
+    }
     this.emitFullHudSync();
+  }
+
+  repairAllTowers() {
+    if (multiplayer.isClient()) {
+      multiplayer.sendCombatCommand('CMD_REPAIR_ALL', {});
+      audio.playUi('click');
+      return;
+    }
+    this.repairAllTowersByActor(multiplayer.localPeerId);
+  }
+
+  private repairAllTowersByActor(actorId: string) {
+    const damaged = this.towers.filter(
+      (t) => t.hp < t.maxHp || t.burnTimer > 0 || t.corrosionTimer > 0 || t.chillTimer > 0
+    );
+    if (damaged.length === 0) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio('Todas as torres e barreiras estão com integridade máxima.', 'info');
+      }
+      return;
+    }
+    const totalCost = damaged.reduce((acc, t) => acc + this.getRepairCost(t), 0);
+    if (this.getActorBudget(actorId) < totalCost) {
+      if (actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Orçamento insuficiente para reparo geral ($${totalCost} necessário).`, 'warn');
+        audio.playUi('error');
+      }
+      return;
+    }
+
+    this.addActorBudget(actorId, -totalCost);
+    for (const t of damaged) {
+      t.hp = t.maxHp;
+      t.burnTimer = 0;
+      t.corrosionTimer = 0;
+      t.chillTimer = 0;
+      this.effects.spawnSparks(t.wx, 1.3, t.wz, 4, 0x38bdf8);
+    }
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot();
+    audio.playUi('repair');
+    const helper = multiplayer.getPlayer(actorId)?.callsign || 'CMDR';
+    const msg = `${multiplayer.isActive() ? `${helper}: ` : ''}Reparo geral concluído em ${damaged.length} estrutura(s) (-$${totalCost}).`;
+    this.pushRadio(msg, 'good');
+    if (multiplayer.isHost()) multiplayer.broadcastRadio(msg, 'good', this.currentWave);
+    if (this.selectedTower) {
+      bus.emit('hud:selectedTower', this.serializeTower(this.selectedTower));
+    }
+    this.emitFullHudSync();
+  }
+
+  private tryRebuildRuin(idx: number, freeRebuild = false, actorId = multiplayer.localPeerId): boolean {
+    const ruin = this.destroyedRuins[idx];
+    if (!ruin) return false;
+    if (multiplayer.isClient() && !freeRebuild && actorId === multiplayer.localPeerId) {
+      multiplayer.sendCombatCommand('CMD_REBUILD_RUBBLE', { col: ruin.col, row: ruin.row });
+      audio.playUi('click');
+      return true;
+    }
+    const def = (TOWER_DEFINITIONS as any)[ruin.defId];
+    if (!def) return false;
+    if (!this.pathfinder.isBuildable(ruin.col, ruin.row) || this.towerGrid[ruin.row][ruin.col]) {
+      return false;
+    }
+    const cost = freeRebuild ? 0 : ruin.rebuildCost;
+    if (this.getActorBudget(actorId) < cost) {
+      if (!freeRebuild && actorId === multiplayer.localPeerId) {
+        this.pushRadio(`Orçamento insuficiente para reconstruir ${def.shortName} ($${cost}).`, 'warn');
+        audio.playUi('error');
+      }
+      return false;
+    }
+
+    const groundEnemies = this.enemyPool.active.filter((e: EnemyEntity) => e.domain === 'ground');
+    const check = this.pathfinder.canPlaceAt(ruin.col, ruin.row, groundEnemies);
+    if (!check.ok) {
+      if (!freeRebuild && actorId === multiplayer.localPeerId) {
+        this.pushRadio(check.reason, 'alert');
+        audio.playUi('error');
+      }
+      return false;
+    }
+
+    this.addActorBudget(actorId, -cost);
+    this.scene.remove(ruin.mesh);
+    this.destroyedRuins.splice(idx, 1);
+
+    const ownerInfo = multiplayer.getPlayer(actorId);
+    const maxHp = this.getEffectiveTowerMaxHp(ruin.defId, ruin.level, ruin.specialization);
+    const tower = this.spawnTowerOnGrid({
+      col: ruin.col,
+      row: ruin.row,
+      towerId: ruin.defId,
+      level: ruin.level,
+      specialization: ruin.specialization,
+      hp: Math.round(maxHp * (freeRebuild ? 0.75 : 1)),
+      maxHp,
+      effectiveCost: this.getEffectiveTowerCost(ruin.defId),
+      totalInvested: cost || Math.round(this.getEffectiveTowerCost(ruin.defId) * 0.65),
+      priority: def.defaultPriority,
+      turretAngle: Math.PI / 2,
+      totalDamage: 0,
+      kills: 0,
+      ownerId: actorId,
+      ownerName: ownerInfo?.callsign || multiplayer.getCallsign(),
+      ownerColor: ownerInfo?.color || SQUAD_COLORS[0]
+    });
+
+    this.syncHostPlayerTowerCounts();
+    this.refreshGlobalBuffs();
+    this.rerouteActiveGroundEnemies();
+    this.rebuildActiveRouteLines();
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot();
+    audio.playUi('build');
+    this.effects.spawnSparks(tower.wx, 1.5, tower.wz, 8, 0xfbbf24);
+    this.spawnFloatingText(
+      tower.wx,
+      2.8,
+      tower.wz,
+      freeRebuild ? 'AUTO-RECONSTRUÍDA!' : `RECONSTRUÍDA -$${cost}`,
+      '#38bdf8'
+    );
+    if (!freeRebuild && actorId === multiplayer.localPeerId) {
+      this.selectTower(tower);
+    }
+    this.emitFullHudSync();
+    return true;
   }
 
   sellSelectedTower() {
     const t = this.selectedTower;
     if (!t) return;
+    if (!multiplayer.canModifyTower(t.ownerId, multiplayer.localPeerId)) {
+      this.pushRadio(`Apenas ${t.ownerName} pode vender esta torre!`, 'warn');
+      audio.playUi('error');
+      return;
+    }
+    if (multiplayer.isClient()) {
+      multiplayer.sendCombatCommand('CMD_SELL_TOWER', { towerId: t.id });
+      this.selectTower(null);
+      audio.playUi('click');
+      return;
+    }
+    this.sellTowerByActor(t, multiplayer.localPeerId);
+  }
 
+  private sellTowerByActor(t: TowerEntity, actorId: string) {
+    if (!t || !multiplayer.canModifyTower(t.ownerId, actorId)) return;
     const refund = Math.floor(t.totalInvested * 0.75 * Math.max(0.4, t.hp / t.maxHp));
-    this.budget += refund;
+    this.addActorBudget(t.ownerId, refund);
     this.removeTowerFromMap(t);
-    this.saveCurrentMissionSnapshot(true);
+    this.syncHostPlayerTowerCounts();
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot(true);
 
     audio.playUi('click');
     this.spawnFloatingText(t.wx, 2.4, t.wz, `+$${refund}`, '#4ade80');
-    this.selectTower(null);
+    if (this.selectedTower === t) this.selectTower(null);
     this.emitFullHudSync();
   }
 
@@ -1661,6 +3172,10 @@ export class Battlefield3D {
     if (t.laserLine) this.scene.remove(t.laserLine);
     for (const lb of t.laserBeams) this.scene.remove(lb);
     if (t.ewPulseMesh) this.scene.remove(t.ewPulseMesh);
+    if (t.ownerRingMesh) {
+      this.scene.remove(t.ownerRingMesh);
+      (t.ownerRingMesh.material as THREE.Material).dispose();
+    }
     t.hpEl.remove();
   }
 
@@ -1669,6 +3184,7 @@ export class Battlefield3D {
     this.towers = this.towers.filter((item) => item !== t);
     this.cleanupTowerVisuals(t);
     this.pathfinder.removeStructure(t.col, t.row);
+    this.syncHostPlayerTowerCounts();
     this.refreshGlobalBuffs();
     this.rerouteActiveGroundEnemies();
     this.rebuildActiveRouteLines();
@@ -1680,16 +3196,35 @@ export class Battlefield3D {
   setSelectedTowerPriority(prio: string) {
     const t = this.selectedTower;
     if (!t || t.def.isBarrier) return;
+    if (!multiplayer.canModifyTower(t.ownerId, multiplayer.localPeerId)) {
+      this.pushRadio(`Apenas ${t.ownerName} pode alterar a prioridade desta torre!`, 'warn');
+      audio.playUi('error');
+      return;
+    }
+    if (multiplayer.isClient()) {
+      multiplayer.sendCombatCommand('CMD_SET_TARGETING', { towerId: t.id, mode: prio });
+      audio.playUi('click');
+      return;
+    }
+    this.setTowerPriorityByActor(t, prio, multiplayer.localPeerId);
+  }
+
+  private setTowerPriorityByActor(t: TowerEntity, prio: string, actorId: string) {
+    if (!t || t.def.isBarrier || !multiplayer.canModifyTower(t.ownerId, actorId)) return;
     t.priority = prio;
-    this.saveCurrentMissionSnapshot();
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot();
     audio.playUi('click');
-    bus.emit('hud:selectedTower', this.serializeTower(t));
+    if (this.selectedTower === t) {
+      bus.emit('hud:selectedTower', this.serializeTower(t));
+    }
   }
 
   private refreshGlobalBuffs() {
-    this.hasGlobalAesa = this.towers.some(
-      (t) => t.defId === 'patriot' && t.def.levels[t.level - 1].globalStealthReveal
-    );
+    this.hasGlobalAesa = this.towers.some((t) => {
+      if (t.empDisabledTimer > 0) return false;
+      const spec = getTowerLevelSpec(t.def, t.level, t.specialization);
+      return !!spec?.globalStealthReveal;
+    });
   }
 
   private rerouteActiveGroundEnemies() {
@@ -1721,14 +3256,40 @@ export class Battlefield3D {
     this.setSpeed(this.timeScale === 0 ? this.lastNonZeroSpeed : 0);
   }
 
-  startNextWave(isManualCall = false) {
+  startNextWave(isManualCall = false, forceFromVote = false) {
     if (this.gameOver || this.victory) return;
+    if (multiplayer.isClient()) {
+      if (isManualCall) {
+        multiplayer.sendCombatCommand('CMD_VOTE_NEXT_WAVE', {});
+        audio.playUi('click');
+      }
+      return;
+    }
+    if (
+      isManualCall &&
+      !forceFromVote &&
+      multiplayer.isHost() &&
+      multiplayer.getConnectedPlayerCount() > 1
+    ) {
+      this.handleVoteNextWave(multiplayer.localPeerId);
+      return;
+    }
     if (this.waveActive && (this.spawnQueue.length > 0 || this.currentWave >= this.totalWaves)) return;
     if (this.currentWave >= this.totalWaves) return;
 
+    multiplayer.clearWaveVotes();
+    this.waveVoteTimer = 0;
+    multiplayer.setWaveVoteTimer(0);
+
     if (isManualCall && (this.inIntermission || (this.waveActive && this.spawnQueue.length === 0))) {
       const earlyBonus = Math.round(25 + Math.max(0, this.wavePrepTimer) * 2.5);
-      this.budget += earlyBonus;
+      if (multiplayer.isActive()) {
+        for (const p of multiplayer.getPlayers()) {
+          if (p.connected) this.addActorBudget(p.peerId, earlyBonus);
+        }
+      } else {
+        this.budget += earlyBonus;
+      }
       this.spawnFloatingText(0, 4.5, -24, `BÔNUS ANTECIPADO +$${earlyBonus}`, '#4ade80');
       this.pushRadio(`Onda chamada antecipadamente! Bônus tático: +$${earlyBonus}.`, 'good');
     }
@@ -1756,11 +3317,12 @@ export class Battlefield3D {
 
     audio.playUi('wave');
     const hasBoss = waveDef.groups.some((g: any) => (ENEMY_DEFINITIONS as any)[g.type]?.isBoss);
-    this.pushRadio(
-      `ONDA ${this.currentWave}/${this.totalWaves}: ${waveDef.title} — ${waveDef.brief}`,
-      hasBoss ? 'alert' : 'info'
-    );
-    this.saveCurrentMissionSnapshot(true);
+    const waveMsg = `ONDA ${this.currentWave}/${this.totalWaves}: ${waveDef.title} — ${waveDef.brief}`;
+    this.pushRadio(waveMsg, hasBoss ? 'alert' : 'info');
+    if (multiplayer.isHost()) {
+      multiplayer.broadcastRadio(waveMsg, hasBoss ? 'alert' : 'info', this.currentWave);
+    }
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot(true);
     this.emitFullHudSync();
   }
 
@@ -1769,45 +3331,74 @@ export class Battlefield3D {
     if (!def) return null;
 
     const waveDef = this.stageConfig.waves[Math.max(0, this.currentWave - 1)];
-    const hpMult = waveDef?.hpMult || 1.0;
+    const hpMult = (waveDef?.hpMult || 1.0) * (multiplayer.isHost() ? multiplayer.getEnemyHpScale() : 1.0);
 
     const e = this.enemyPool.acquire() as EnemyEntity;
     e.id = this.nextEnemyId++;
     e.type = type;
     e.domain = def.domain;
+    const shieldScale = def.isBoss ? hpMult : multiplayer.isHost() ? multiplayer.getEnemyHpScale() : 1;
     e.armorClass = def.armorClass;
     e.maxHp = Math.round(def.maxHp * hpMult);
     e.hp = e.maxHp;
+    e.maxShield = Math.round((def.maxShield || 0) * shieldScale);
+    e.shield = e.maxShield;
     e.speed = def.speed;
     e.reward = def.reward;
     e.wbReward = def.wbReward || 0;
     e.fobDamage = def.fobDamage;
-    e.isMechanized = def.isMechanized;
-    e.hasEra = def.hasEra;
-    e.eraIntact = def.hasEra;
-    e.hasAps = def.hasAps;
+    e.isMechanized = !!def.isMechanized;
+    e.hasEra = !!def.hasEra;
+    e.eraIntact = !!def.hasEra;
+    e.hasAps = !!def.hasAps;
     e.apsCooldownTimer = 0;
     e.apsMaxCooldown = def.apsCooldown || 4.0;
-    e.isStealth = def.isStealth;
+    e.isStealth = !!def.isStealth;
     e.stealthRevealed = false;
+    e.revealedTimer = 0;
     e.isBoss = !!def.isBoss;
     e.isSubBoss = !!def.isSubBoss;
     e.isStageBoss = !!def.isStageBoss;
     e.isMegaBoss = !!def.isMegaBoss;
     e.slowImmune = !!def.slowImmune;
+    e.frontalShieldReduction = def.frontalShieldReduction || 0;
+    e.isBurrowed = !!def.canBurrow;
+    e.unburrowed = false;
     e.dismountCount = def.dismountCount || 0;
-    e.radius = def.radius;
+    e.radius = def.radius || 10;
+    e.resistances = def.resistances || null;
     e.ewSlow = 0;
     e.ewDamageAmp = 0;
     e.thermalVuln = 0;
     e.ewDisabled = false;
+    e.cryoSlow = 0;
+    e.cryoSlowTimer = 0;
+    e.rootTimer = 0;
     e.stunTimer = 0;
+    e.poisonTimer = 0;
+    e.poisonDps = 0;
+    e.poisonSourceTower = null;
+    e.burnTimer = 0;
+    e.burnDps = 0;
+    e.burnSourceTower = null;
+    e.corrosionReduction = 0;
+    e.corrosionTimer = 0;
+    e.markedAmp = 0;
+    e.markedTimer = 0;
+    e.dotTickAccum = 0;
+    e.healAuraTimer = 1.2;
+    e.shieldAuraTimer = 1.5;
+    e.shockwaveTimer = def.towerAttack?.shockwaveInterval || 999;
     e.hitFlashTimer = 0;
     e.walkPhase = Math.random() * Math.PI * 2;
     e.towerAttackTimer = def.towerAttack ? Math.min(2.0, def.towerAttack.interval * 0.5) : 999;
+    e.attackPrepTimer = 0;
+    e.isPreparingAttack = false;
+    e.pendingAttackTargets = [];
     e.empPulseTimer = def.towerAttack?.empPulseInterval || 999;
     e.periodicSpawnTimer = def.periodicSpawn?.interval || 999;
     e.triggeredThresholds.clear();
+    e.damageByPlayer = {};
 
     const sp = this.pathfinder.spawnPoints[spawnIdx % this.pathfinder.spawnPoints.length];
     if (overridePos) {
@@ -1869,10 +3460,26 @@ export class Battlefield3D {
   private updateEnemyHealthBar(e: EnemyEntity) {
     const ratio = Math.max(0, Math.min(1, e.hp / e.maxHp));
     e.hpFillEl.style.width = `${ratio * 100}%`;
-    e.hpFillEl.style.background = ratio > 0.55 ? '#22c55e' : ratio > 0.25 ? '#f59e0b' : '#ef4444';
+    e.hpFillEl.style.background =
+      e.shield > 0
+        ? 'linear-gradient(90deg, #22c55e, #22d3ee)'
+        : ratio > 0.55
+          ? '#22c55e'
+          : ratio > 0.25
+            ? '#f59e0b'
+            : '#ef4444';
 
-    if (e.ewDisabled) {
+    if (e.shield > 0) {
+      e.hpDotEl.style.background = '#38bdf8';
+      e.hpDotEl.classList.remove('hidden');
+    } else if (e.ewDisabled) {
       e.hpDotEl.style.background = '#c084fc';
+      e.hpDotEl.classList.remove('hidden');
+    } else if (e.poisonTimer > 0) {
+      e.hpDotEl.style.background = '#84cc16';
+      e.hpDotEl.classList.remove('hidden');
+    } else if (e.burnTimer > 0) {
+      e.hpDotEl.style.background = '#f97316';
       e.hpDotEl.classList.remove('hidden');
     } else if (e.hasAps && e.apsCooldownTimer <= 0) {
       e.hpDotEl.style.background = '#22d3ee';
@@ -1886,13 +3493,24 @@ export class Battlefield3D {
   }
 
   // === AIR SUPPORT STRIKES ===
-  executeA10Strafe(cx: number, cy: number, angle: number) {
+  executeA10Strafe(cx: number, cy: number, angle: number, actorId = multiplayer.localPeerId) {
     const sup = this.airSupport.a10;
-    if (this.budget < sup.cost || sup.timer > 0) return;
+    if (this.getActorBudget(actorId) < sup.cost || sup.timer > 0) return;
 
-    this.budget -= sup.cost;
+    if (multiplayer.isClient() && actorId === multiplayer.localPeerId) {
+      multiplayer.sendCombatCommand('CMD_AIR_SUPPORT', {
+        supportType: 'a10',
+        worldX: simToWorldX(cx),
+        worldZ: simToWorldZ(cy),
+        angle
+      });
+      this.cancelActiveTool();
+      return;
+    }
+
+    this.addActorBudget(actorId, -sup.cost);
     sup.timer = sup.cooldown;
-    this.cancelActiveTool();
+    if (actorId === multiplayer.localPeerId) this.cancelActiveTool();
 
     const dirX = Math.cos(angle);
     const dirY = Math.sin(angle);
@@ -1912,6 +3530,7 @@ export class Battlefield3D {
 
     this.activeFlyovers.push({
       kind: 'a10',
+      actorId,
       jet,
       x: startOffX,
       y: startOffY,
@@ -1933,13 +3552,24 @@ export class Battlefield3D {
     this.emitFullHudSync();
   }
 
-  executeHellfireStrike(tx: number, ty: number) {
+  executeHellfireStrike(tx: number, ty: number, actorId = multiplayer.localPeerId) {
     const sup = this.airSupport.hellfire;
-    if (this.budget < sup.cost || sup.timer > 0) return;
+    if (this.getActorBudget(actorId) < sup.cost || sup.timer > 0) return;
 
-    this.budget -= sup.cost;
+    if (multiplayer.isClient() && actorId === multiplayer.localPeerId) {
+      multiplayer.sendCombatCommand('CMD_AIR_SUPPORT', {
+        supportType: 'hellfire',
+        worldX: simToWorldX(tx),
+        worldZ: simToWorldZ(ty),
+        angle: 0
+      });
+      this.cancelActiveTool();
+      return;
+    }
+
+    this.addActorBudget(actorId, -sup.cost);
     sup.timer = sup.cooldown;
-    this.cancelActiveTool();
+    if (actorId === multiplayer.localPeerId) this.cancelActiveTool();
 
     audio.playHellfireStrike();
 
@@ -1980,6 +3610,7 @@ export class Battlefield3D {
     p.flightTime = 0;
     p.totalFlightTime = 0.44;
     p.sourceTower = null;
+    p.ownerId = actorId;
     p.smokeTimer = 0;
     p.life = 2.0;
 
@@ -1990,13 +3621,24 @@ export class Battlefield3D {
     this.emitFullHudSync();
   }
 
-  executeB52CarpetBomb(cx: number, cy: number) {
+  executeB52CarpetBomb(cx: number, cy: number, actorId = multiplayer.localPeerId) {
     const sup = this.airSupport.b52;
-    if (this.budget < sup.cost || sup.timer > 0) return;
+    if (this.getActorBudget(actorId) < sup.cost || sup.timer > 0) return;
 
-    this.budget -= sup.cost;
+    if (multiplayer.isClient() && actorId === multiplayer.localPeerId) {
+      multiplayer.sendCombatCommand('CMD_AIR_SUPPORT', {
+        supportType: 'b52',
+        worldX: simToWorldX(cx),
+        worldZ: simToWorldZ(cy),
+        angle: 0
+      });
+      this.cancelActiveTool();
+      return;
+    }
+
+    this.addActorBudget(actorId, -sup.cost);
     sup.timer = sup.cooldown;
-    this.cancelActiveTool();
+    if (actorId === multiplayer.localPeerId) this.cancelActiveTool();
 
     const dirX = 1;
     const dirY = 0;
@@ -2013,6 +3655,7 @@ export class Battlefield3D {
 
     this.activeFlyovers.push({
       kind: 'b52',
+      actorId,
       jet,
       x: startOffX,
       y: cy,
@@ -2062,9 +3705,53 @@ export class Battlefield3D {
       return;
     }
 
-    const dt = this.gameOver ? 0 : realDt * this.timeScale;
+    if (multiplayer.isClient()) {
+      multiplayer.checkHostWatchdog();
+    }
+    const hostLost = multiplayer.isClient() && multiplayer.isHostSignalLost();
+    const dt = this.gameOver || hostLost ? 0 : realDt * this.timeScale;
 
-    if (dt > 0) {
+    if (multiplayer.isClient()) {
+      // Client runs 60 FPS visual interpolation from authoritative Host STATE_SNAPSHOT
+      if (dt > 0) {
+        const lerpAlpha = Math.min(1, realDt * 14);
+        this.enemyPool.forEachActive((obj) => {
+          const e = obj as EnemyEntity;
+          const tgt = this.clientEnemyTargets.get(e.id);
+          if (tgt) {
+            e.wx = THREE.MathUtils.lerp(e.wx, tgt.wx, lerpAlpha);
+            e.wy = THREE.MathUtils.lerp(e.wy, tgt.wy, lerpAlpha);
+            e.wz = THREE.MathUtils.lerp(e.wz, tgt.wz, lerpAlpha);
+            e.angle = rotateAngleTowards(e.angle, tgt.angle, 14 * realDt);
+          }
+          if (e.rig) {
+            e.rig.root.position.set(e.wx, 0, e.wz);
+            e.rig.hullGroup.rotation.y = e.angle;
+            e.rig.hullGroup.position.y = e.isBurrowed ? -0.58 : 0;
+            if (e.rig.energyShieldMesh) e.rig.energyShieldMesh.visible = e.shield > 0;
+            if (e.rig.prepRing) e.rig.prepRing.visible = e.isPreparingAttack;
+            if (e.rig.ewRing) e.rig.ewRing.visible = e.ewDisabled;
+            if (e.rig.rotors) {
+              for (const prop of e.rig.rotors) prop.rotation.y += dt * 18;
+            }
+          }
+        });
+        for (const tower of this.towers) {
+          this.decayTowerWeaponVisuals(tower, dt);
+          if (tower.defId === 'ew_crew' || tower.defId === 'iron_dome' || tower.defId === 'eng_workshop' || tower.defId === 'energy_extractor') {
+            if (tower.rig.radarPivots) {
+              tower.rig.radarPivots.forEach((dish, idx) => {
+                dish.rotation.y += dt * (2.4 + idx * 0.7);
+              });
+            }
+          }
+        }
+        this.updateTransientBeams(dt);
+        this.effects.update(dt);
+        this.updateFloatingTexts(dt);
+      }
+      this.updateCoopVisuals(realDt);
+    } else if (dt > 0) {
       for (const key of ['a10', 'hellfire', 'b52'] as const) {
         if (this.airSupport[key].timer > 0) {
           this.airSupport[key].timer = Math.max(0, this.airSupport[key].timer - dt);
@@ -2074,6 +3761,8 @@ export class Battlefield3D {
       this.updateWaveState(dt);
       this.updateEwFields(dt);
       this.updateFireZones(dt);
+      this.updateActiveMinesAndBeams(dt);
+      this.updateDestroyedRuins(dt);
       this.updateEnemies(dt);
       this.updatePendingShots(dt);
       this.updateTowers(dt);
@@ -2082,6 +3771,13 @@ export class Battlefield3D {
       this.updateFlyovers(dt);
       this.effects.update(dt);
       this.updateFloatingTexts(dt);
+      this.updateCoopVisuals(realDt);
+    } else {
+      this.updateCoopVisuals(realDt);
+    }
+
+    if (this.selectedEnemy && !this.selectedEnemy._pooledActive) {
+      this.selectEnemy(null);
     }
 
     this.updateInteractiveOverlays();
@@ -2089,19 +3785,31 @@ export class Battlefield3D {
     this.updateCameraShake(realDt);
     this.composer.render();
 
+    if (multiplayer.isHost()) {
+      this.snapshotAccum += realDt;
+      if (this.snapshotAccum >= 0.06) {
+        this.snapshotAccum = 0;
+        this.broadcastCoopSnapshot();
+      }
+    }
+
     this.hudSyncAccum += realDt;
     if (this.hudSyncAccum >= 0.1) {
       this.hudSyncAccum = 0;
       this.emitFullHudSync();
       if (this.selectedTower) {
         bus.emit('hud:selectedTower', this.serializeTower(this.selectedTower));
+      } else if (this.selectedEnemy && this.selectedEnemy._pooledActive) {
+        bus.emit('hud:selectedEnemy', this.serializeEnemy(this.selectedEnemy));
       }
     }
 
-    this.autosaveAccum += realDt;
-    if (this.autosaveAccum >= 10.0) {
-      this.autosaveAccum = 0;
-      this.saveCurrentMissionSnapshot();
+    if (!multiplayer.isActive()) {
+      this.autosaveAccum += realDt;
+      if (this.autosaveAccum >= 10.0) {
+        this.autosaveAccum = 0;
+        this.saveCurrentMissionSnapshot();
+      }
     }
   };
 
@@ -2135,6 +3843,24 @@ export class Battlefield3D {
   }
 
   private updateWaveState(dt: number) {
+    if (
+      multiplayer.isHost() &&
+      this.waveVoteTimer > 0 &&
+      !this.gameOver &&
+      this.currentWave < this.totalWaves &&
+      (!this.waveActive || this.spawnQueue.length === 0)
+    ) {
+      this.waveVoteTimer = Math.max(0, this.waveVoteTimer - dt);
+      multiplayer.setWaveVoteTimer(Math.ceil(this.waveVoteTimer));
+      if (this.waveVoteTimer <= 0) {
+        const msg = `⏱️ Votação expirou (20s) — iniciando Onda ${this.currentWave + 1}!`;
+        this.pushRadio(msg, 'info');
+        multiplayer.broadcastRadio(msg, 'info', this.currentWave);
+        this.startNextWave(true, true);
+        return;
+      }
+    }
+
     if (this.waveActive) {
       this.waveElapsed += dt;
       while (this.spawnQueue.length > 0 && this.spawnQueue[0].time <= this.waveElapsed) {
@@ -2155,17 +3881,24 @@ export class Battlefield3D {
 
   private onWaveCleared() {
     this.waveActive = false;
+    this.waveVoteTimer = 0;
+    multiplayer.setWaveVoteTimer(0);
 
     if (this.currentWave >= this.totalWaves) {
       this.victory = true;
       this.gameOver = true;
-      const clearWB = this.stageConfig.clearBonusWB || 60;
+      const baseWB = this.stageConfig.clearBonusWB || 60;
+      const isCoopSquad = multiplayer.isActive() && multiplayer.getConnectedPlayerCount() > 1;
+      const clearWB = isCoopSquad ? Math.round(baseWB * 1.25) : baseWB;
       this.sessionWB += clearWB;
       const newlyUnlocked = saveManager.markStageCompleted(this.currentWorldId, this.currentStageId, clearWB);
       this.pushRadio(
-        `VITÓRIA TOTAL! Fase ${this.stageConfig.id} concluída (+${clearWB} WB$).`,
+        `VITÓRIA TOTAL! Fase ${this.stageConfig.id} concluída (+${clearWB} WB$${isCoopSquad ? ' — +25% Bônus Co-op' : ''}).`,
         'good'
       );
+      if (multiplayer.isHost()) {
+        this.broadcastCoopSnapshot();
+      }
       bus.emit('hud:gameover', {
         victory: true,
         wave: this.currentWave,
@@ -2175,24 +3908,61 @@ export class Battlefield3D {
         wbEarned: this.sessionWB,
         newlyUnlocked,
         worldId: this.currentWorldId,
-        stageId: this.currentStageId
+        stageId: this.currentStageId,
+        coopBonusPercent: isCoopSquad ? 25 : 0
       });
       this.emitFullHudSync();
       return;
     }
 
-    const interest = Math.min(180, Math.floor(this.budget * 0.05));
-    if (interest > 0) {
-      this.budget += interest;
-      this.spawnFloatingText(0, 4.0, -18, `JUROS +5%: +$${interest}`, '#38bdf8');
-      this.pushRadio(`Onda ${this.currentWave} neutralizada! Juros táticos (+5%): +$${interest}.`, 'good');
+    // Grant per-player wave interest (5%, capped at $180)
+    let displayInterest = 0;
+    if (multiplayer.isActive()) {
+      for (const p of multiplayer.getPlayers()) {
+        if (!p.connected) continue;
+        const pInt = Math.min(180, Math.floor(p.budget * 0.05));
+        if (pInt > 0) this.addActorBudget(p.peerId, pInt);
+        if (p.peerId === multiplayer.localPeerId) displayInterest = pInt;
+      }
     } else {
-      this.pushRadio(`Onda ${this.currentWave} neutralizada! Prepare ou repare suas defesas.`, 'good');
+      displayInterest = Math.min(180, Math.floor(this.budget * 0.05));
+      if (displayInterest > 0) this.budget += displayInterest;
+    }
+    if (displayInterest > 0) {
+      this.spawnFloatingText(0, 4.0, -18, `JUROS +5%: +$${displayInterest}`, '#38bdf8');
+    }
+
+    // Energy Extractor wave completion payout credited to extractor owners
+    let totalExtractorBonus = 0;
+    let extractorIdx = 0;
+    for (const tower of this.towers) {
+      if (tower.defId !== 'energy_extractor' || tower.empDisabledTimer > 0) continue;
+      const spec = getTowerLevelSpec(tower.def, tower.level, tower.specialization);
+      const effMult = extractorIdx < 4 ? 1 : 0.45;
+      extractorIdx++;
+      const gain = Math.round((spec?.waveClearIncome || 0) * effMult);
+      if (gain > 0) {
+        totalExtractorBonus += gain;
+        this.addActorBudget(tower.ownerId, gain);
+      }
+    }
+    if (totalExtractorBonus > 0) {
+      this.spawnFloatingText(-6, 4.4, -14, `EXTRATORES +$${totalExtractorBonus}`, '#facc15');
+    }
+
+    const radioMsg =
+      displayInterest > 0 || totalExtractorBonus > 0
+        ? `Onda ${this.currentWave} neutralizada! Juros: +$${displayInterest}${totalExtractorBonus > 0 ? ` | Extratores: +$${totalExtractorBonus}` : ''}.`
+        : `Onda ${this.currentWave} neutralizada! Prepare ou repare suas defesas.`;
+    this.pushRadio(radioMsg, 'good');
+    if (multiplayer.isHost()) {
+      multiplayer.broadcastRadio(radioMsg, 'good', this.currentWave);
+      multiplayer.clearWaveVotes();
     }
 
     this.inIntermission = true;
     this.wavePrepTimer = 14.0;
-    this.saveCurrentMissionSnapshot(true);
+    if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot(true);
     this.emitFullHudSync();
   }
 
@@ -2202,75 +3972,382 @@ export class Battlefield3D {
       e.ewSlow = 0;
       e.ewDamageAmp = 0;
       e.ewDisabled = false;
-      e.stealthRevealed = this.hasGlobalAesa;
+      e.stealthRevealed = this.hasGlobalAesa || (e.revealedTimer || 0) > 0;
     });
 
     for (const tower of this.towers) {
-      if (tower.defId !== 'ew_crew') continue;
+      tower.maxShield = 0;
+      tower.allyRangeBuff = 0;
+      tower.allyFireRateBuff = 0;
+      tower.allyCritBonus = 0;
+      tower.allyKillBonus = 0;
+      tower.allyHpBonus = 0;
+      tower.repairCostDiscount = 0;
+      tower.fogDebuff = this.pathfinder.hasTerrainFeature(tower.col, tower.row, 'fog');
+    }
+
+    // Volcanic lava adjacency hazard during active waves
+    if (this.waveActive && this.stageConfig?.lavaCells?.length) {
+      for (const tower of this.towers) {
+        let nearLava = false;
+        for (let dr = -1; dr <= 1 && !nearLava; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            if (this.pathfinder.hasTerrainFeature(tower.col + dc, tower.row + dr, 'lava')) {
+              nearLava = true;
+              break;
+            }
+          }
+        }
+        if (nearLava) {
+          this.damageTower(tower, 3.2 * dt);
+        }
+      }
+    }
+
+    let extractorCount = 0;
+
+    for (const tower of this.towers) {
       if (tower.empDisabledTimer > 0) continue;
-      const spec = this.getEffectiveSpec(tower);
+      const spec = getTowerLevelSpec(tower.def, tower.level, tower.specialization);
+      if (!spec) continue;
 
-      if (tower.rig.radarPivots) {
-        tower.rig.radarPivots.forEach((dish, idx) => {
-          dish.rotation.y += dt * (2.4 + idx * 0.7);
-        });
-      }
-      if (tower.rig.turretPivot) {
-        tower.rig.turretPivot.rotation.y += dt * 0.8;
-      }
-      if (tower.rig.ewRings) {
-        tower.rig.ewRings.forEach((ring, idx) => {
-          const phase = (this.elapsedReal * 1.4 + idx * 0.5) % 1;
-          ring.scale.setScalar(0.75 + phase * 1.35);
-        });
-      }
-      if (tower.ewPulseMesh) {
-        const rangeW = spec.range * WORLD_SCALE;
-        const p = (this.elapsedReal * 0.75) % 1;
-        tower.ewPulseMesh.scale.setScalar(Math.max(0.05, p * rangeW));
-        (tower.ewPulseMesh.material as THREE.MeshBasicMaterial).opacity = 0.42 * (1 - p);
-      }
-
-      let triggeredEmp = false;
-      if (spec.empInterval > 0) {
-        tower.empTimer += dt;
-        if (tower.empTimer >= spec.empInterval) {
-          tower.empTimer = 0;
-          triggeredEmp = true;
-          audio.playShot('emp');
-          this.effects.spawnShockwave(tower.wx, 0.25, tower.wz, spec.range * WORLD_SCALE, 0xc084fc);
+      // Support turret/radar rotation & pulse visual animation
+      if (tower.defId === 'ew_crew' || tower.defId === 'iron_dome' || tower.defId === 'eng_workshop' || tower.defId === 'energy_extractor' || (tower.defId === 'cryo_tower' && spec.isCryoAura)) {
+        if (tower.rig.radarPivots) {
+          tower.rig.radarPivots.forEach((dish, idx) => {
+            dish.rotation.y += dt * (2.4 + idx * 0.7);
+          });
+        }
+        if (tower.rig.turretPivot) {
+          tower.rig.turretPivot.rotation.y += dt * (tower.defId === 'energy_extractor' ? 1.4 : 0.8);
+        }
+        if (tower.rig.ewRings) {
+          tower.rig.ewRings.forEach((ring, idx) => {
+            const phase = (this.elapsedReal * 1.4 + idx * 0.5) % 1;
+            ring.scale.setScalar(0.75 + phase * 1.35);
+          });
+        }
+        if (tower.ewPulseMesh) {
+          const pulseRange = tower.defId === 'cryo_tower' && !spec.isCryoAura ? 0 : (spec.range || 160);
+          if (pulseRange > 0) {
+            tower.ewPulseMesh.visible = true;
+            const rangeW = pulseRange * WORLD_SCALE;
+            const p = (this.elapsedReal * 0.75) % 1;
+            tower.ewPulseMesh.scale.setScalar(Math.max(0.05, p * rangeW));
+            (tower.ewPulseMesh.material as THREE.MeshBasicMaterial).opacity = 0.4 * (1 - p);
+          } else {
+            tower.ewPulseMesh.visible = false;
+          }
         }
       }
 
+      if (tower.defId === 'ew_crew') {
+        let triggeredEmp = false;
+        if (spec.empInterval > 0) {
+          tower.empTimer += dt;
+          if (tower.empTimer >= spec.empInterval) {
+            tower.empTimer = 0;
+            triggeredEmp = true;
+            audio.playShot('emp');
+            this.effects.spawnShockwave(tower.wx, 0.25, tower.wz, spec.range * WORLD_SCALE, 0xc084fc);
+            if (multiplayer.isHost()) {
+              multiplayer.queueCombatEvent({
+                kind: 'EMP_PULSE',
+                wx: Number(tower.wx.toFixed(2)),
+                wy: 0.25,
+                wz: Number(tower.wz.toFixed(2)),
+                scale: Number((spec.range * WORLD_SCALE).toFixed(2)),
+                color: 0xc084fc
+              });
+            }
+          }
+        }
+
+        // Buff nearby allied towers & clear low-visibility fog debuff
+        for (const ally of this.towers) {
+          if (ally === tower) continue;
+          const d = Math.hypot(ally.x - tower.x, ally.y - tower.y);
+          if (d <= spec.range) {
+            ally.allyRangeBuff = Math.max(ally.allyRangeBuff, spec.allyRangeBuff || 0);
+            ally.allyFireRateBuff = Math.max(ally.allyFireRateBuff, spec.allyFireRateBuff || 0);
+            ally.allyCritBonus = Math.max(ally.allyCritBonus, spec.allyCritBonus || 0);
+            ally.fogDebuff = false;
+          }
+        }
+
+        this.enemyPool.forEachActive((obj) => {
+          const e = obj as EnemyEntity;
+          const dist = Math.hypot(e.x - tower.x, e.y - tower.y);
+          if (dist <= spec.range) {
+            if (!e.slowImmune && spec.slowFactor) {
+              e.ewSlow = Math.max(e.ewSlow, spec.slowFactor);
+            }
+            e.ewDamageAmp = Math.max(e.ewDamageAmp, spec.damageAmp || 0);
+            if (spec.disablesActiveDefense) {
+              e.ewDisabled = true;
+            }
+            e.stealthRevealed = true;
+            e.revealedTimer = Math.max(e.revealedTimer || 0, 1.5);
+            if (e.isBurrowed && spec.globalStealthReveal) {
+              e.isBurrowed = false;
+              e.unburrowed = true;
+            }
+
+            if (triggeredEmp && (e.isMechanized || e.maxShield > 0)) {
+              e.stunTimer = Math.max(e.stunTimer, spec.empStunDuration || 1.2);
+              this.applyDamageToEnemy(e, spec.damage || 90, 'emp', tower, { allowApsIntercept: false });
+              this.spawnFloatingText(e.wx, 2.5, e.wz, 'EMP STUN!', '#e879f9');
+            }
+          }
+        });
+      } else if (tower.defId === 'iron_dome') {
+        const shieldCap = spec.shieldCapacity || 420;
+        const regenRate = spec.shieldRegenPerSec || 45;
+        const allyHeal = spec.healPerSec || 0;
+        for (const ally of this.towers) {
+          const d = Math.hypot(ally.x - tower.x, ally.y - tower.y);
+          if (d <= spec.range) {
+            const wasUnshielded = ally.maxShield <= 0;
+            ally.maxShield = Math.max(ally.maxShield, shieldCap);
+            if (wasUnshielded && ally.shield <= 0) {
+              ally.shield = Math.round(shieldCap * 0.45);
+            } else {
+              ally.shield = Math.min(ally.maxShield, ally.shield + regenRate * dt);
+            }
+            if (allyHeal > 0 && ally.hp < ally.maxHp) {
+              ally.hp = Math.min(ally.maxHp, ally.hp + allyHeal * dt);
+            }
+          }
+        }
+      } else if (tower.defId === 'eng_workshop') {
+        const healRate = spec.healPerSec || 24;
+        for (const ally of this.towers) {
+          const d = Math.hypot(ally.x - tower.x, ally.y - tower.y);
+          if (d <= spec.range) {
+            if (ally.hp < ally.maxHp) {
+              ally.hp = Math.min(ally.maxHp, ally.hp + healRate * dt);
+            }
+            if (spec.cleansesDebuffs) {
+              ally.burnTimer = 0;
+              ally.corrosionTimer = 0;
+              ally.chillTimer = 0;
+            }
+            ally.repairCostDiscount = Math.max(ally.repairCostDiscount, spec.repairCostDiscount || 0.25);
+            ally.allyHpBonus = Math.max(ally.allyHpBonus, spec.allyHpBonus || 0);
+            ally.allyFireRateBuff = Math.max(ally.allyFireRateBuff, spec.allyFireRateBuff || 0);
+          }
+        }
+
+        // Spec B: Automatic reconstruction of nearby destroyed ruins
+        if (spec.autoRebuildRuins && this.destroyedRuins.length > 0) {
+          tower.rebuildCooldownTimer = Math.max(0, tower.rebuildCooldownTimer - dt);
+          if (tower.rebuildCooldownTimer <= 0) {
+            const targetIdx = this.destroyedRuins.findIndex((r) => {
+              const rx = r.col * TILE_SIZE + TILE_SIZE * 0.5;
+              const ry = r.row * TILE_SIZE + TILE_SIZE * 0.5;
+              return Math.hypot(rx - tower.x, ry - tower.y) <= spec.range;
+            });
+            if (targetIdx !== -1 && this.tryRebuildRuin(targetIdx, true)) {
+              tower.rebuildCooldownTimer = spec.rebuildCooldown || 14;
+            }
+          }
+        }
+      } else if (tower.defId === 'energy_extractor') {
+        const effMult = extractorCount < 4 ? 1.0 : 0.45;
+        if (extractorCount >= 4 && !this.extractorCapWarned) {
+          this.extractorCapWarned = true;
+          this.pushRadio('Mais de 4 Extratores ativos: eficiência adicional reduzida para 45%.', 'warn');
+        }
+        extractorCount++;
+
+        if (this.waveActive && spec.incomePerSec > 0) {
+          tower.incomeAccum += spec.incomePerSec * effMult * dt;
+          if (tower.incomeAccum >= 10) {
+            const gain = Math.floor(tower.incomeAccum);
+            tower.incomeAccum -= gain;
+            this.addActorBudget(tower.ownerId, gain);
+            this.spawnFloatingText(tower.wx, 2.4, tower.wz, `+$${gain}`, '#facc15');
+          }
+        }
+
+        for (const ally of this.towers) {
+          if (ally === tower) continue;
+          const d = Math.hypot(ally.x - tower.x, ally.y - tower.y);
+          if (d <= spec.range) {
+            ally.allyKillBonus = Math.max(ally.allyKillBonus, spec.killBountyBonus || 0);
+            ally.allyFireRateBuff = Math.max(ally.allyFireRateBuff, spec.allyFireRateBuff || 0);
+          }
+        }
+      } else if (tower.defId === 'cryo_tower' && spec.isCryoAura) {
+        this.enemyPool.forEachActive((obj) => {
+          const e = obj as EnemyEntity;
+          if (e.domain !== 'ground' || e.slowImmune) return;
+          const dist = Math.hypot(e.x - tower.x, e.y - tower.y);
+          if (dist <= spec.range) {
+            e.cryoSlow = Math.max(e.cryoSlow, spec.slowFactor || 0.42);
+            e.cryoSlowTimer = Math.max(e.cryoSlowTimer, 0.35);
+            if (spec.thermalVuln) {
+              e.thermalVuln = Math.max(e.thermalVuln, spec.thermalVuln);
+            }
+          }
+        });
+      }
+    }
+
+    for (const tower of this.towers) {
+      tower.shield = Math.min(tower.shield, tower.maxShield);
+    }
+  }
+
+  private updateTransientBeams(dt: number) {
+    for (let i = this.transientBeams.length - 1; i >= 0; i--) {
+      const tb = this.transientBeams[i];
+      tb.life -= dt;
+      if (tb.life <= 0) {
+        this.scene.remove(tb.line);
+        tb.line.geometry.dispose();
+        (tb.line.material as THREE.Material).dispose();
+        this.transientBeams.splice(i, 1);
+      } else {
+        const mat = tb.line.material as THREE.LineBasicMaterial;
+        mat.opacity = Math.min(1, tb.life * 4);
+      }
+    }
+  }
+
+  private decayTowerWeaponVisuals(tower: TowerEntity, dt: number) {
+    tower.recoil = Math.max(0, tower.recoil - dt * 1.4);
+    if (tower.muzzleFlashTimer > 0) {
+      tower.muzzleFlashTimer -= dt;
+      if (tower.rig.muzzleFlashMesh) {
+        tower.rig.muzzleFlashMesh.visible = tower.muzzleFlashTimer > 0;
+        if (tower.muzzleFlashTimer > 0) {
+          tower.rig.muzzleFlashMesh.rotation.z += dt * 45;
+        }
+      }
+    } else if (tower.rig.muzzleFlashMesh && tower.rig.muzzleFlashMesh.visible) {
+      tower.rig.muzzleFlashMesh.visible = false;
+    }
+
+    if (tower.rig.barrelPivot) {
+      if ((tower.rig.barrelPivot as any)._baseZ === undefined) {
+        (tower.rig.barrelPivot as any)._baseZ = tower.rig.barrelPivot.position.z;
+      }
+      tower.rig.barrelPivot.position.z = (tower.rig.barrelPivot as any)._baseZ - tower.recoil;
+    }
+  }
+
+  private updateActiveMinesAndBeams(dt: number) {
+    this.updateTransientBeams(dt);
+
+    for (let i = this.activeMines.length - 1; i >= 0; i--) {
+      const mine = this.activeMines[i];
+      let triggered = false;
+      this.enemyPool.forEachActive((obj) => {
+        if (triggered) return;
+        const e = obj as EnemyEntity;
+        if (e.domain !== 'ground') return;
+        if (Math.hypot(e.x - mine.x, e.y - mine.y) <= 26 + (e.radius || 10) * 0.4) {
+          triggered = true;
+        }
+      });
+      if (!triggered) continue;
+
+      this.scene.remove(mine.mesh);
+      this.activeMines.splice(i, 1);
+
+      const isEmp = mine.damageType === 'emp';
+      audio.playShot(isEmp ? 'emp' : 'explosion');
+      this.effects.spawnExplosion(mine.wx, 0.35, mine.wz, mine.splashRadius * WORLD_SCALE * 0.65);
+      if (isEmp) {
+        this.effects.spawnShockwave(mine.wx, 0.25, mine.wz, mine.splashRadius * WORLD_SCALE, 0xc084fc);
+      }
+      if (multiplayer.isHost()) {
+        multiplayer.queueCombatEvent({
+          kind: isEmp ? 'EMP_PULSE' : 'EXPLODE',
+          wx: Number(mine.wx.toFixed(2)),
+          wy: 0.35,
+          wz: Number(mine.wz.toFixed(2)),
+          scale: Number((mine.splashRadius * WORLD_SCALE * (isEmp ? 1 : 0.65)).toFixed(2)),
+          color: isEmp ? 0xc084fc : 0xf97316
+        });
+      }
+
+      const rSq = mine.splashRadius * mine.splashRadius;
       this.enemyPool.forEachActive((obj) => {
         const e = obj as EnemyEntity;
-        const dist = Math.hypot(e.x - tower.x, e.y - tower.y);
-        if (dist <= spec.range) {
-          if (!e.slowImmune) {
-            e.ewSlow = Math.max(e.ewSlow, spec.slowFactor);
+        if (e.domain !== 'ground') return;
+        const dSq = (e.x - mine.x) ** 2 + (e.y - mine.y) ** 2;
+        if (dSq <= rSq) {
+          if (e.isBurrowed) {
+            e.isBurrowed = false;
+            e.unburrowed = true;
           }
-          e.ewDamageAmp = Math.max(e.ewDamageAmp, spec.damageAmp);
-          e.ewDisabled = true;
-          e.stealthRevealed = true;
-
-          if (triggeredEmp && e.isMechanized) {
-            e.stunTimer = Math.max(e.stunTimer, spec.empStunDuration);
-            this.applyDamageToEnemy(e, spec.damage, 'emp', tower, { allowApsIntercept: false });
-            this.spawnFloatingText(e.wx, 2.5, e.wz, 'EMP STUN!', '#e879f9');
+          const mult = 1 - Math.sqrt(dSq) / (mine.splashRadius * 1.45);
+          this.applyDamageToEnemy(e, mine.damage * Math.max(0.45, mult), mine.damageType, mine.sourceTower, {
+            isSplash: true,
+            isMine: true,
+            allowApsIntercept: false,
+            heavyMultiplier: mine.heavyMultiplier
+          });
+          if (mine.stunDuration > 0 && (isEmp || e.isMechanized)) {
+            e.stunTimer = Math.max(e.stunTimer, mine.stunDuration);
+          }
+          if (mine.slowFactor > 0 && !e.slowImmune) {
+            e.cryoSlow = Math.max(e.cryoSlow, mine.slowFactor);
+            e.cryoSlowTimer = Math.max(e.cryoSlowTimer, mine.slowDuration || 2.5);
+          }
+          if (mine.burnDps > 0) {
+            e.burnDps = Math.max(e.burnDps, mine.burnDps);
+            e.burnTimer = Math.max(e.burnTimer, mine.burnDuration || 3.5);
+            e.burnSourceTower = mine.sourceTower;
+          }
+          if (mine.markedAmp > 0) {
+            e.markedAmp = Math.max(e.markedAmp, mine.markedAmp);
+            e.markedTimer = Math.max(e.markedTimer, 4.0);
           }
         }
       });
     }
   }
 
-  private spawnFireZone(x: number, y: number, radius: number, dps: number, duration: number) {
+  private updateDestroyedRuins(dt: number) {
+    for (let i = this.destroyedRuins.length - 1; i >= 0; i--) {
+      const r = this.destroyedRuins[i];
+      r.life += dt;
+      const mat = r.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = 0.42 + Math.sin(r.life * 4.2) * 0.22;
+    }
+  }
+
+  private spawnFireZone(
+    x: number,
+    y: number,
+    radius: number,
+    dps: number,
+    duration: number,
+    damageType = 'fire',
+    corrosionAmount = 0,
+    ownerId?: string
+  ) {
     if (this.fireZones.length >= 28) {
       const oldest = this.fireZones.shift()!;
       this.scene.remove(oldest.mesh);
     }
     const wx = simToWorldX(x);
     const wz = simToWorldZ(y);
-    const mesh = new THREE.Mesh(this.fireZoneGeo, this.fireZoneMat);
+    const mat =
+      damageType === 'poison'
+        ? ((this as any).toxicZoneMat ??= new THREE.MeshBasicMaterial({
+            color: 0x84cc16,
+            transparent: true,
+            opacity: 0.34,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+          }))
+        : this.fireZoneMat;
+    const mesh = new THREE.Mesh(this.fireZoneGeo, mat);
     mesh.rotation.x = -Math.PI / 2;
     mesh.position.set(wx, 0.07, wz);
     mesh.scale.setScalar(radius * WORLD_SCALE);
@@ -2283,6 +4360,9 @@ export class Battlefield3D {
       wz,
       radius,
       dps,
+      damageType,
+      corrosionAmount,
+      ownerId,
       life: duration,
       maxLife: duration,
       tickAccum: 0,
@@ -2309,7 +4389,8 @@ export class Battlefield3D {
         fz.smokeAccum = 0;
         const ang = Math.random() * Math.PI * 2;
         const r = Math.random() * fz.radius * WORLD_SCALE * 0.65;
-        this.effects.spawnSmokePuff(fz.wx + Math.cos(ang) * r, 0.25, fz.wz + Math.sin(ang) * r, 0xf97316, 0.45);
+        const puffColor = fz.damageType === 'poison' ? 0x84cc16 : 0xf97316;
+        this.effects.spawnSmokePuff(fz.wx + Math.cos(ang) * r, 0.25, fz.wz + Math.sin(ang) * r, puffColor, 0.45);
       }
 
       fz.tickAccum += dt;
@@ -2322,8 +4403,16 @@ export class Battlefield3D {
           if (e.domain !== 'ground') return;
           const dSq = (e.x - fz.x) ** 2 + (e.y - fz.y) ** 2;
           if (dSq <= rSq) {
-            e.eraIntact = false;
-            this.applyDamageToEnemy(e, fz.dps * tickDt, 'thermobaric', null, { allowApsIntercept: false });
+            if (fz.damageType === 'poison') {
+              if (fz.corrosionAmount > 0) {
+                e.corrosionReduction = Math.min(0.85, Math.max(e.corrosionReduction, fz.corrosionAmount));
+                e.corrosionTimer = Math.max(e.corrosionTimer, 3.0);
+              }
+              this.applyDamageToEnemy(e, fz.dps * tickDt, 'poison', null, { allowApsIntercept: false, actorId: fz.ownerId });
+            } else {
+              e.eraIntact = false;
+              this.applyDamageToEnemy(e, fz.dps * tickDt, 'thermobaric', null, { allowApsIntercept: false, actorId: fz.ownerId });
+            }
           }
         });
       }
@@ -2343,6 +4432,52 @@ export class Battlefield3D {
       if (e.apsCooldownTimer > 0) {
         e.apsCooldownTimer = Math.max(0, e.apsCooldownTimer - dt);
       }
+      if (e.revealedTimer > 0) {
+        e.revealedTimer = Math.max(0, e.revealedTimer - dt);
+      }
+      if (e.cryoSlowTimer > 0) {
+        e.cryoSlowTimer = Math.max(0, e.cryoSlowTimer - dt);
+        if (e.cryoSlowTimer <= 0) e.cryoSlow = 0;
+      }
+      if (e.rootTimer > 0) {
+        e.rootTimer = Math.max(0, e.rootTimer - dt);
+      }
+      if (e.corrosionTimer > 0) {
+        e.corrosionTimer = Math.max(0, e.corrosionTimer - dt);
+        if (e.corrosionTimer <= 0) e.corrosionReduction = 0;
+      }
+      if (e.markedTimer > 0) {
+        e.markedTimer = Math.max(0, e.markedTimer - dt);
+        if (e.markedTimer <= 0) e.markedAmp = 0;
+      }
+
+      // Tick continuous Poison & Fire DoTs cleanly every 0.25s
+      if (e.poisonTimer > 0 || e.burnTimer > 0) {
+        const hadPoison = e.poisonTimer > 0;
+        const hadBurn = e.burnTimer > 0;
+        if (e.poisonTimer > 0) e.poisonTimer = Math.max(0, e.poisonTimer - dt);
+        if (e.burnTimer > 0) e.burnTimer = Math.max(0, e.burnTimer - dt);
+        e.dotTickAccum += dt;
+        if (e.dotTickAccum >= 0.25) {
+          const tickDt = e.dotTickAccum;
+          e.dotTickAccum = 0;
+          if (e.poisonDps > 0 && hadPoison) {
+            this.applyDamageToEnemy(e, e.poisonDps * tickDt, 'poison', e.poisonSourceTower, {
+              allowApsIntercept: false,
+              ignoreShield: true
+            });
+            if (!e._pooledActive) return;
+          }
+          if (e.burnDps > 0 && hadBurn) {
+            this.applyDamageToEnemy(e, e.burnDps * tickDt, 'fire', e.burnSourceTower, {
+              allowApsIntercept: false
+            });
+            if (!e._pooledActive) return;
+          }
+        }
+        if (e.poisonTimer <= 0) e.poisonDps = 0;
+        if (e.burnTimer <= 0) e.burnDps = 0;
+      }
 
       if (e.hitFlashTimer > 0) {
         e.hitFlashTimer -= dt;
@@ -2356,18 +4491,66 @@ export class Battlefield3D {
         }
       }
 
+      // Terrain interactions (Ice, Toxic Pools, Volcanic Lava)
+      let terrainSpeedMult = 1.0;
+      if (e.domain === 'ground') {
+        if (this.pathfinder.hasTerrainFeatureAtPx(e.x, e.y, 'ice')) {
+          terrainSpeedMult = def?.resistances?.ice <= 0.6 ? 1.32 : 1.2;
+        }
+        if (this.pathfinder.hasTerrainFeatureAtPx(e.x, e.y, 'toxic')) {
+          if (def?.resistances?.poison <= 0.45) {
+            e.hp = Math.min(e.maxHp, e.hp + 16 * dt);
+          }
+        }
+        if (this.pathfinder.hasTerrainFeatureAtPx(e.x, e.y, 'lava')) {
+          if (e.type === 'piromante' || e.type === 'tita_cerco') {
+            terrainSpeedMult = 1.18;
+          }
+        }
+      }
+
+      // Escavador Subterrâneo burrow/emerge AI
+      if (def?.canBurrow && e.isBurrowed) {
+        const nearTower = this.towers.some((t) => Math.hypot(t.x - e.x, t.y - e.y) <= 95);
+        if (nearTower || e.hp < e.maxHp * 0.58 || e.distToFob <= 125 || e.ewDisabled) {
+          e.isBurrowed = false;
+          e.unburrowed = true;
+          this.effects.spawnSmokePuff(e.wx, 0.35, e.wz, 0xa8a29e, 0.9);
+          this.spawnFloatingText(e.wx, 2.2, e.wz, 'EMERGIU!', '#f59e0b');
+        }
+      }
+
       if (e.rig) {
         if (e.rig.ewRing) e.rig.ewRing.visible = e.ewDisabled;
         if (e.rig.apsShield) {
           e.rig.apsShield.visible = e.hasAps && e.apsCooldownTimer <= 0 && !e.ewDisabled;
           e.rig.apsShield.rotation.y += dt * 1.2;
         }
+        if (e.rig.energyShieldMesh) {
+          e.rig.energyShieldMesh.visible = e.shield > 0;
+          if (e.shield > 0) {
+            e.rig.energyShieldMesh.rotation.y += dt * 1.6;
+          }
+        }
+        if (e.rig.prepRing) {
+          e.rig.prepRing.visible = e.isPreparingAttack;
+          if (e.isPreparingAttack) {
+            const pulse = 0.85 + Math.sin(this.elapsedReal * 18) * 0.2;
+            e.rig.prepRing.scale.setScalar(pulse);
+            e.rig.prepRing.rotation.z += dt * 6;
+          }
+        }
         if (e.rig.eraMeshes && e.hasEra) {
           e.rig.eraMeshes.forEach((m) => (m.visible = e.eraIntact));
         }
 
+        e.rig.hullGroup.position.y = e.isBurrowed ? -0.58 : 0;
+        if (e.isBurrowed && Math.random() < dt * 8) {
+          this.effects.spawnSmokePuff(e.wx, 0.15, e.wz, 0x78716c, 0.45);
+        }
+
         if (e.isStealth && e.rig.stealthMaterials) {
-          const op = e.stealthRevealed ? 0.96 : 0.3;
+          const op = e.stealthRevealed ? 0.96 : 0.28;
           e.rig.stealthMaterials.forEach((m) => (m.opacity = op));
           if (e.stealthRevealed) {
             const lockRing = this.createCircleLoop(4, 0x22d3ee, 0.85);
@@ -2382,7 +4565,7 @@ export class Battlefield3D {
           if (e.type === 'heli' || e.type === 'subboss_ka50') {
             e.rig.rotors[0].rotation.y += dt * 24;
             if (e.rig.rotors[1]) e.rig.rotors[1].rotation.y -= dt * 24;
-          } else if (e.type === 'drone_swarm') {
+          } else if (e.type === 'drone_swarm' || e.type === 'drone_recon' || e.type === 'drone_bombardeiro') {
             for (const prop of e.rig.rotors) {
               prop.rotation.z += dt * 34;
             }
@@ -2400,6 +4583,48 @@ export class Battlefield3D {
         e.stunTimer -= dt;
         this.updateEnemyHealthBar(e);
         return;
+      }
+
+      // === SUPPORT ENEMY AI: HEALER & SHIELD EMITTER ===
+      if (def?.aiBehavior === 'healer' && !e.ewDisabled) {
+        e.healAuraTimer -= dt;
+        if (e.healAuraTimer <= 0) {
+          e.healAuraTimer = 2.2;
+          let healed = 0;
+          this.enemyPool.forEachActive((otherObj) => {
+            if (healed >= 4) return;
+            const ally = otherObj as EnemyEntity;
+            if (ally === e || ally.hp >= ally.maxHp) return;
+            if (Math.hypot(ally.x - e.x, ally.y - e.y) <= 145) {
+              ally.hp = Math.min(ally.maxHp, ally.hp + Math.round(ally.maxHp * 0.1 + 35));
+              this.effects.spawnSparks(ally.wx, ally.wy + 1.0, ally.wz, 3, 0x22c55e);
+              healed++;
+            }
+          });
+          if (healed > 0) {
+            this.effects.spawnShockwave(e.wx, 0.25, e.wz, 3.8, 0x22c55e);
+          }
+        }
+      } else if (def?.aiBehavior === 'shield_aura' && !e.ewDisabled) {
+        e.shieldAuraTimer -= dt;
+        if (e.shieldAuraTimer <= 0) {
+          e.shieldAuraTimer = 2.6;
+          let shielded = 0;
+          this.enemyPool.forEachActive((otherObj) => {
+            if (shielded >= 4) return;
+            const ally = otherObj as EnemyEntity;
+            if (ally === e) return;
+            if (Math.hypot(ally.x - e.x, ally.y - e.y) <= 155) {
+              const targetCap = Math.max(ally.maxShield, 90);
+              if (ally.shield < targetCap) {
+                ally.maxShield = targetCap;
+                ally.shield = Math.min(targetCap, ally.shield + 55);
+                this.effects.spawnSparks(ally.wx, ally.wy + 1.0, ally.wz, 3, 0x38bdf8);
+                shielded++;
+              }
+            }
+          });
+        }
       }
 
       // === BOSS & SUB-BOSS SPECIAL SPAWNS ===
@@ -2421,31 +4646,100 @@ export class Battlefield3D {
         }
       }
 
-      // === BOSS WEAPON AI (ATTACKING PLAYER TOWERS) ===
-      if (def?.towerAttack && this.towers.length > 0) {
+      // === ARMED ENEMY WEAPON AI WITH TELEGRAPHED PREP ===
+      if (def?.towerAttack && this.towers.length > 0 && !e.isBurrowed) {
         const atk = def.towerAttack;
-        e.towerAttackTimer -= dt;
-        if (e.towerAttackTimer <= 0) {
-          const targets = this.findTowerTargetsForBoss(e, atk.range, atk.targets || 1, !!atk.preferAa);
-          if (targets.length > 0) {
+        if (e.isPreparingAttack) {
+          e.attackPrepTimer -= dt;
+          if (e.attackPrepTimer <= 0) {
+            e.isPreparingAttack = false;
             e.towerAttackTimer = atk.interval;
-            const primaryT = targets[0];
-            if (e.rig?.turretPivot) {
-              const localAngle = Math.atan2(primaryT.x - e.x, primaryT.y - e.y) - e.angle;
-              e.rig.turretPivot.rotation.y = localAngle;
+            const liveTargets = e.pendingAttackTargets.filter((t) => this.towers.includes(t) && t.hp > 0);
+            const finalTargets =
+              liveTargets.length > 0
+                ? liveTargets
+                : this.findTowerTargetsForBoss(
+                    e,
+                    atk.range,
+                    atk.targets || 1,
+                    atk.targetPriority || (atk.preferAa ? 'aa_first' : 'nearest')
+                  );
+            if (finalTargets.length > 0) {
+              const primaryT = finalTargets[0];
+              if (e.rig?.turretPivot) {
+                e.rig.turretPivot.rotation.y = Math.atan2(primaryT.x - e.x, primaryT.y - e.y) - e.angle;
+              }
+              if (atk.revealOnAttackDuration) {
+                e.revealedTimer = Math.max(e.revealedTimer, atk.revealOnAttackDuration);
+                e.stealthRevealed = true;
+              }
+              for (const tTower of finalTargets) {
+                if (atk.attackType === 'melee') {
+                  audio.playUi('error');
+                  this.effects.spawnSparks(tTower.wx, 1.1, tTower.wz, 5, 0xf97316);
+                  if (atk.splashRadius > 0) {
+                    const rSq = atk.splashRadius * atk.splashRadius;
+                    for (const nearT of [...this.towers]) {
+                      if ((nearT.x - tTower.x) ** 2 + (nearT.y - tTower.y) ** 2 <= rSq) {
+                        this.damageTower(
+                          nearT,
+                          atk.damage,
+                          atk.burnDps || 0,
+                          atk.burnDuration || 0,
+                          atk.corrosionDps || 0,
+                          atk.corrosionDuration || 0,
+                          atk.chillSlow || 0,
+                          atk.chillDuration || 0,
+                          atk.empDisableDuration || 0
+                        );
+                      }
+                    }
+                  } else {
+                    this.damageTower(
+                      tTower,
+                      atk.damage,
+                      atk.burnDps || 0,
+                      atk.burnDuration || 0,
+                      atk.corrosionDps || 0,
+                      atk.corrosionDuration || 0,
+                      atk.chillSlow || 0,
+                      atk.chillDuration || 0,
+                      atk.empDisableDuration || 0
+                    );
+                  }
+                } else {
+                  this.spawnBossProjectile(e, tTower, atk);
+                }
+              }
+              if ((e.isBoss || atk.damage >= 55) && this.elapsedReal - this.lastTowerAttackWarnTime > 6.5) {
+                this.lastTowerAttackWarnTime = this.elapsedReal;
+                bus.emit('hud:alert', {
+                  level: 'warn',
+                  text: `⚠️ ALERTA DE DEFESA: ${def.shortName} está atacando ${primaryT.def.shortName}!`
+                });
+              }
             }
-            for (const tTower of targets) {
-              this.spawnBossProjectile(e, tTower, atk);
+          }
+        } else {
+          e.towerAttackTimer -= dt;
+          if (e.towerAttackTimer <= 0) {
+            const targets = this.findTowerTargetsForBoss(
+              e,
+              atk.range,
+              atk.targets || 1,
+              atk.targetPriority || (atk.preferAa ? 'aa_first' : 'nearest')
+            );
+            if (targets.length > 0) {
+              e.isPreparingAttack = true;
+              e.attackPrepTimer = atk.prepTime ?? 0.35;
+              e.pendingAttackTargets = targets;
+              if (e.rig?.turretPivot) {
+                const pT = targets[0];
+                e.rig.turretPivot.rotation.y = Math.atan2(pT.x - e.x, pT.y - e.y) - e.angle;
+              }
+            } else {
+              e.towerAttackTimer = 0.55;
             }
-            if (this.elapsedReal - this.lastTowerAttackWarnTime > 6.5) {
-              this.lastTowerAttackWarnTime = this.elapsedReal;
-              bus.emit('hud:alert', {
-                level: 'warn',
-                text: `⚠️ ALERTA DE DEFESA: ${def.shortName} está atacando ${primaryT.def.shortName}!`
-              });
-            }
-          } else {
-            e.towerAttackTimer = 0.6;
           }
         }
 
@@ -2457,53 +4751,76 @@ export class Battlefield3D {
             this.triggerBossEmpPulse(e, atk.empPulseRange || 250, atk.empDisableDuration || 2.0);
           }
         }
+
+        // Siege Titan seismic shockwave
+        if (atk.shockwaveInterval) {
+          e.shockwaveTimer -= dt;
+          if (e.shockwaveTimer <= 0) {
+            e.shockwaveTimer = atk.shockwaveInterval;
+            const swRange = atk.shockwaveRange || 210;
+            const swDmg = atk.shockwaveDamage || 110;
+            audio.playExplosion(1.1);
+            this.addTrauma(0.32);
+            this.effects.spawnShockwave(e.wx, 0.3, e.wz, swRange * WORLD_SCALE, 0xf97316);
+            this.spawnFloatingText(e.wx, 3.6, e.wz, 'ONDA SÍSMICA!', '#f97316');
+            for (const nearT of [...this.towers]) {
+              if (Math.hypot(nearT.x - e.x, nearT.y - e.y) <= swRange) {
+                this.damageTower(nearT, swDmg);
+              }
+            }
+          }
+        }
       }
 
-      const moveSpeed = e.speed * (1 - e.ewSlow);
+      const combinedSlow = Math.min(0.75, Math.max(e.ewSlow, e.cryoSlow));
+      const rootMult = e.rootTimer > 0 ? 0 : 1;
+      const moveSpeed = e.speed * (1 - (e.slowImmune ? 0 : combinedSlow)) * terrainSpeedMult * rootMult;
 
-      if (e.domain === 'ground' && e.rig?.wheels) {
+      if (e.domain === 'ground' && e.rig?.wheels && moveSpeed > 0) {
         for (const w of e.rig.wheels) {
           w.rotation.x += dt * moveSpeed * 0.14;
         }
       }
 
-      if (e.domain === 'ground') {
-        if (!e.path || e.pathIndex >= e.path.length) {
-          const ec = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(e.x / TILE_SIZE)));
-          const er = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(e.y / TILE_SIZE)));
-          e.path = this.pathfinder.findPath(ec, er);
-          e.pathIndex = e.path && e.path.length > 1 ? 1 : 0;
-        }
+      if (moveSpeed > 0) {
+        if (e.domain === 'ground') {
+          if (!e.path || e.pathIndex >= e.path.length) {
+            const ec = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(e.x / TILE_SIZE)));
+            const er = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(e.y / TILE_SIZE)));
+            e.path = this.pathfinder.findPath(ec, er);
+            e.pathIndex = e.path && e.path.length > 1 ? 1 : 0;
+          }
 
-        if (e.path && e.pathIndex < e.path.length) {
-          const wp = e.path[e.pathIndex];
-          const dx = wp.x - e.x;
-          const dy = wp.y - e.y;
+          if (e.path && e.pathIndex < e.path.length) {
+            const wp = e.path[e.pathIndex];
+            const dx = wp.x - e.x;
+            const dy = wp.y - e.y;
+            const dist = Math.hypot(dx, dy);
+
+            if (dist <= moveSpeed * dt + 2) {
+              e.x = wp.x;
+              e.y = wp.y;
+              e.pathIndex += 1;
+            } else {
+              const targetAngle = Math.atan2(dx, dy);
+              e.angle = rotateAngleTowards(e.angle, targetAngle, 10 * dt);
+              e.x += (dx / dist) * moveSpeed * dt;
+              e.y += (dy / dist) * moveSpeed * dt;
+            }
+          }
+          e.distToFob = this.pathfinder.getDistanceToFobPx(e.x, e.y);
+        } else {
+          const dx = fobX - e.x;
+          const dy = fobY - e.y;
           const dist = Math.hypot(dx, dy);
-
-          if (dist <= moveSpeed * dt + 2) {
-            e.x = wp.x;
-            e.y = wp.y;
-            e.pathIndex += 1;
-          } else {
+          if (dist > 1) {
             const targetAngle = Math.atan2(dx, dy);
-            e.angle = rotateAngleTowards(e.angle, targetAngle, 10 * dt);
+            e.angle = rotateAngleTowards(e.angle, targetAngle, 5 * dt);
             e.x += (dx / dist) * moveSpeed * dt;
             e.y += (dy / dist) * moveSpeed * dt;
           }
+          e.distToFob = dist;
         }
-        e.distToFob = this.pathfinder.getDistanceToFobPx(e.x, e.y);
-      } else {
-        const dx = fobX - e.x;
-        const dy = fobY - e.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 1) {
-          const targetAngle = Math.atan2(dx, dy);
-          e.angle = rotateAngleTowards(e.angle, targetAngle, 5 * dt);
-          e.x += (dx / dist) * moveSpeed * dt;
-          e.y += (dy / dist) * moveSpeed * dt;
-        }
-        e.distToFob = dist;
       }
 
       e.wx = simToWorldX(e.x);
@@ -2515,7 +4832,7 @@ export class Battlefield3D {
         if (e.rig.turretPivot && !def?.towerAttack) {
           e.rig.turretPivot.rotation.y = Math.sin(this.elapsedReal * 1.4 + e.id) * 0.25;
         }
-        if (e.rig.legs && e.rig.legs.length > 0) {
+        if (e.rig.legs && e.rig.legs.length > 0 && moveSpeed > 0) {
           e.walkPhase += dt * moveSpeed * 0.16;
           for (let i = 0; i < e.rig.legs.length; i += 2) {
             const swing = Math.sin(e.walkPhase + i) * 0.55;
@@ -2533,19 +4850,28 @@ export class Battlefield3D {
     });
   }
 
-  private findTowerTargetsForBoss(e: EnemyEntity, range: number, maxTargets: number, preferAa: boolean): TowerEntity[] {
+  private findTowerTargetsForBoss(
+    e: EnemyEntity,
+    range: number,
+    maxTargets: number,
+    priorityOrAa: string | boolean
+  ): TowerEntity[] {
     const rSq = range * range;
+    const priority = typeof priorityOrAa === 'boolean' ? (priorityOrAa ? 'aa_first' : 'nearest') : priorityOrAa;
     const inRange: Array<{ tower: TowerEntity; score: number }> = [];
 
     for (const t of this.towers) {
       const dSq = (t.x - e.x) ** 2 + (t.y - e.y) ** 2;
       if (dSq > rSq) continue;
-      // Taunt Abrams Bunker draws boss fire first!
-      let priorityScore = dSq;
-      if (t.def.isTauntTank) priorityScore -= 1e8;
-      else if (preferAa && (t.def.domain === 'air' || t.def.domain === 'both')) priorityScore -= 1e6;
-      else if (t.def.isBarrier) priorityScore += 1e7; // Bosses prefer attacking armed towers over empty Hesco walls
-      inRange.push({ tower: t, score: priorityScore });
+      let score = dSq;
+      if (t.def.isTauntTank) score -= 1e8;
+      else if (priority === 'aa_first' && (t.def.domain === 'air' || t.def.domain === 'both')) score -= 1e6;
+      else if (priority === 'support_first' && t.def.category === 'support') score -= 1e6;
+      else if (priority === 'tech_first' && (t.def.category === 'support' || t.defId === 'tesla_tower' || t.defId === 'railgun' || t.defId === 'helios_laser')) score -= 1e6;
+      else if (priority === 'high_value') score -= t.totalInvested * 800;
+      else if (priority === 'high_dps') score -= (getTowerLevelSpec(t.def, t.level, t.specialization)?.damage || 0) * 1000;
+      else if (t.def.isBarrier) score += 1e7;
+      inRange.push({ tower: t, score });
     }
 
     inRange.sort((a, b) => a.score - b.score);
@@ -2556,20 +4882,28 @@ export class Battlefield3D {
     audio.playShot('emp');
     this.effects.spawnShockwave(e.wx, 0.4, e.wz, range * WORLD_SCALE, 0xa855f7);
     this.spawnFloatingText(e.wx, 3.4, e.wz, 'PULSO EMP HOSTIL!', '#c084fc');
+    if (multiplayer.isHost()) {
+      multiplayer.queueCombatEvent({
+        kind: 'EMP_PULSE',
+        wx: Number(e.wx.toFixed(2)),
+        wy: 0.4,
+        wz: Number(e.wz.toFixed(2)),
+        scale: Number((range * WORLD_SCALE).toFixed(2)),
+        color: 0xa855f7
+      });
+    }
 
     for (const t of this.towers) {
       if (t.def.isBarrier) continue;
       const dist = Math.hypot(t.x - e.x, t.y - e.y);
       if (dist > range) continue;
 
-      // Protected if within range of an operational Iron Dome or EW Crew
-      const isProtected = this.towers.some(
-        (p) =>
-          p !== t &&
-          p.empDisabledTimer <= 0 &&
-          (p.def.isIronDome || p.defId === 'ew_crew') &&
-          Math.hypot(p.x - t.x, p.y - t.y) <= p.def.levels[p.level - 1].range
-      );
+      const isProtected = this.towers.some((p) => {
+        if (p === t || p.empDisabledTimer > 0) return false;
+        if (!p.def.isIronDome && p.defId !== 'ew_crew') return false;
+        const pSpec = getTowerLevelSpec(p.def, p.level, p.specialization);
+        return Math.hypot(p.x - t.x, p.y - t.y) <= (pSpec?.range || 180);
+      });
       if (!isProtected) {
         t.empDisabledTimer = Math.max(t.empDisabledTimer, disableDuration);
         this.spawnFloatingText(t.wx, 2.5, t.wz, 'EMP DESATIVADA!', '#c084fc');
@@ -2587,27 +4921,41 @@ export class Battlefield3D {
     const targetWy = 1.0;
     const targetWz = targetTower.wz;
 
+    const kind = atk.projectileKind || 'boss_shell';
     let mesh: THREE.Object3D;
-    if (atk.projectileKind === 'boss_autocannon') {
+    if (kind === 'boss_autocannon' || kind === 'enemy_bullet' || kind === 'enemy_sniper') {
       mesh = new THREE.Mesh(this.bulletGeo, this.bossBulletMat);
-      mesh.scale.set(1.6, 1.6, 1.5);
-    } else if (atk.projectileKind === 'boss_shell') {
-      mesh = new THREE.Mesh(this.shellGeo, this.bossShellMat);
-      mesh.scale.setScalar(1.35);
+      mesh.scale.set(kind === 'boss_autocannon' ? 1.6 : 1.15, 1.15, kind === 'enemy_sniper' ? 2.1 : 1.3);
+    } else if (kind === 'enemy_plasma' || kind === 'enemy_acid' || kind === 'enemy_cryo') {
+      const tint = kind === 'enemy_acid' ? 0x84cc16 : kind === 'enemy_cryo' ? 0x38bdf8 : 0x22d3ee;
+      mesh = new THREE.Mesh(this.shellGeo, new THREE.MeshBasicMaterial({ color: tint }));
+      mesh.scale.setScalar(0.85);
+    } else if (kind === 'boss_shell' || kind === 'enemy_emp') {
+      mesh = new THREE.Mesh(this.shellGeo, kind === 'enemy_emp' ? this.empMineMat : this.bossShellMat);
+      mesh.scale.setScalar(kind === 'enemy_emp' ? 1.0 : 1.35);
     } else {
       mesh = createMissileMesh3D('boss_missile');
     }
 
     mesh.position.set(startWx, startWy, startWz);
     this.scene.add(mesh);
-    audio.playShot(atk.projectileKind === 'boss_autocannon' ? 'autocannon' : 'missile');
+    if (e.isBoss || atk.damage >= 45) {
+      audio.playShot(kind === 'boss_autocannon' || kind === 'enemy_bullet' ? 'autocannon' : 'missile');
+    }
     this.effects.spawnSparks(startWx, startWy, startWz, 3, 0xef4444);
 
     const dist = Math.hypot(targetTower.x - e.x, targetTower.y - e.y);
-    const speed = atk.projectileKind === 'boss_autocannon' ? 620 : 340;
+    const isFlatShot =
+      kind === 'boss_autocannon' ||
+      kind === 'enemy_bullet' ||
+      kind === 'enemy_sniper' ||
+      kind === 'enemy_plasma' ||
+      kind === 'enemy_acid' ||
+      kind === 'enemy_cryo';
+    const speed = kind === 'enemy_sniper' ? 840 : isFlatShot ? 580 : 340;
 
     this.bossProjectiles.push({
-      kind: atk.projectileKind,
+      kind,
       mesh,
       wx: startWx,
       wy: startWy,
@@ -2625,8 +4973,13 @@ export class Battlefield3D {
       splashRadius: atk.splashRadius || 0,
       burnDps: atk.burnDps || 0,
       burnDuration: atk.burnDuration || 0,
+      corrosionDps: atk.corrosionDps || 0,
+      corrosionDuration: atk.corrosionDuration || 0,
+      chillDuration: atk.chillDuration || 0,
+      chillSlow: atk.chillSlow || 0,
+      empDisableDuration: atk.empDisableDuration || 0,
       flightTime: 0,
-      totalFlightTime: Math.max(0.32, dist / speed),
+      totalFlightTime: Math.max(0.24, dist / speed),
       smokeTimer: 0,
       alive: true
     });
@@ -2647,7 +5000,14 @@ export class Battlefield3D {
       const prevWy = bp.wy;
       const prevWz = bp.wz;
 
-      const peak = bp.kind === 'boss_autocannon' ? 0.5 : 5.5;
+      const isFlatShot =
+        bp.kind === 'boss_autocannon' ||
+        bp.kind === 'enemy_bullet' ||
+        bp.kind === 'enemy_sniper' ||
+        bp.kind === 'enemy_plasma' ||
+        bp.kind === 'enemy_acid' ||
+        bp.kind === 'enemy_cryo';
+      const peak = isFlatShot ? 0.45 : 5.2;
       bp.wx = THREE.MathUtils.lerp(bp.startWx, bp.targetWx, prog);
       bp.wz = THREE.MathUtils.lerp(bp.startWz, bp.targetWz, prog);
       bp.wy = THREE.MathUtils.lerp(bp.startWy, bp.targetWy, prog) + Math.sin(prog * Math.PI) * peak;
@@ -2655,7 +5015,7 @@ export class Battlefield3D {
       bp.mesh.position.set(bp.wx, bp.wy, bp.wz);
       bp.mesh.lookAt(bp.wx + (bp.wx - prevWx) + 0.0001, bp.wy + (bp.wy - prevWy), bp.wz + (bp.wz - prevWz));
 
-      if (bp.kind !== 'boss_autocannon') {
+      if (!isFlatShot) {
         bp.smokeTimer += dt;
         if (bp.smokeTimer >= 0.03) {
           bp.smokeTimer = 0;
@@ -2663,7 +5023,6 @@ export class Battlefield3D {
         }
       }
 
-      // Check Iron Dome & Abrams Trophy APS interception mid-flight!
       if (prog > 0.25 && prog < 0.92 && this.tryInterceptBossProjectile(bp)) {
         bp.alive = false;
         this.scene.remove(bp.mesh);
@@ -2684,7 +5043,6 @@ export class Battlefield3D {
     const curX = worldToSimX(bp.wx);
     const curY = worldToSimY(bp.wz);
 
-    // 1. Check Iron Dome batteries protecting targetTower or covering projectile path
     for (const t of this.towers) {
       if (!t.def.isIronDome || t.empDisabledTimer > 0) continue;
       if (t.interceptTimer > 0) continue;
@@ -2692,7 +5050,7 @@ export class Battlefield3D {
       const distToTarget = Math.hypot(bp.targetX - t.x, bp.targetY - t.y);
       const distToProj = Math.hypot(curX - t.x, curY - t.y);
       if (distToTarget <= spec.range || distToProj <= spec.range) {
-        t.interceptTimer = spec.interceptCooldown;
+        t.interceptTimer = spec.interceptCooldown || 1.2;
         t.muzzleFlashTimer = 0.08;
         audio.playApsIntercept();
         this.effects.spawnExplosion(bp.wx, bp.wy, bp.wz, 0.65, 0x2dd4bf, false);
@@ -2701,10 +5059,9 @@ export class Battlefield3D {
       }
     }
 
-    // 2. Check Abrams Trophy APS (Lv2+) if targeting Abrams itself
     const tt = bp.targetTower;
     if (tt && tt.hp > 0 && tt.defId === 'abrams_pit' && tt.empDisabledTimer <= 0) {
-      const spec = tt.def.levels[tt.level - 1];
+      const spec = getTowerLevelSpec(tt.def, tt.level, tt.specialization);
       if (spec.trophyCooldown > 0 && tt.trophyTimer <= 0 && Math.hypot(curX - tt.x, curY - tt.y) <= 65) {
         tt.trophyTimer = spec.trophyCooldown;
         audio.playApsIntercept();
@@ -2718,8 +5075,12 @@ export class Battlefield3D {
   }
 
   private detonateBossProjectile(bp: BossProjectileEntity) {
-    this.effects.spawnExplosion(bp.targetWx, 0.9, bp.targetWz, bp.splashRadius > 40 ? 1.15 : 0.7, 0xef4444, true);
-    audio.playExplosion(bp.splashRadius > 40 ? 0.9 : 0.55);
+    const isHeavy = bp.splashRadius > 40 || bp.empDisableDuration > 0;
+    const fxColor = bp.empDisableDuration > 0 ? 0xc084fc : bp.corrosionDps > 0 ? 0x84cc16 : 0xef4444;
+    this.effects.spawnExplosion(bp.targetWx, 0.9, bp.targetWz, isHeavy ? 1.05 : 0.55, fxColor, isHeavy);
+    if (isHeavy) {
+      audio.playExplosion(bp.splashRadius > 40 ? 0.85 : 0.45);
+    }
 
     if (bp.splashRadius > 0) {
       const rSq = bp.splashRadius * bp.splashRadius;
@@ -2729,50 +5090,154 @@ export class Battlefield3D {
         if (dSq <= rSq) {
           const dist = Math.sqrt(dSq);
           const falloff = t === bp.targetTower ? 1.0 : Math.max(0.45, 1 - (dist / bp.splashRadius) * 0.55);
-          this.damageTower(t, bp.damage * falloff, bp.burnDps, bp.burnDuration);
+          this.damageTower(
+            t,
+            bp.damage * falloff,
+            bp.burnDps,
+            bp.burnDuration,
+            bp.corrosionDps,
+            bp.corrosionDuration,
+            bp.chillSlow,
+            bp.chillDuration,
+            bp.empDisableDuration
+          );
         }
       }
     } else if (this.towers.includes(bp.targetTower)) {
-      this.damageTower(bp.targetTower, bp.damage, bp.burnDps, bp.burnDuration);
+      this.damageTower(
+        bp.targetTower,
+        bp.damage,
+        bp.burnDps,
+        bp.burnDuration,
+        bp.corrosionDps,
+        bp.corrosionDuration,
+        bp.chillSlow,
+        bp.chillDuration,
+        bp.empDisableDuration
+      );
     }
   }
 
-  private damageTower(tower: TowerEntity, rawDamage: number, burnDps = 0, burnDuration = 0) {
+  private damageTower(
+    tower: TowerEntity,
+    rawDamage: number,
+    burnDps = 0,
+    burnDuration = 0,
+    corrosionDps = 0,
+    corrosionDuration = 0,
+    chillSlow = 0,
+    chillDuration = 0,
+    empDisableDuration = 0
+  ) {
     if (!this.towers.includes(tower) || tower.hp <= 0) return;
 
-    // Check nearby Iron Dome Lv1-3 armor shield buff
     let shieldReduction = 0;
     for (const p of this.towers) {
-      if (!p.def.isIronDome || p.empDisabledTimer > 0) continue;
-      const spec = p.def.levels[p.level - 1];
+      if (p.empDisabledTimer > 0) continue;
+      if (!p.def.isIronDome && p.defId !== 'eng_workshop') continue;
+      const spec = getTowerLevelSpec(p.def, p.level, p.specialization);
       if (spec.towerShieldReduction > 0 && Math.hypot(p.x - tower.x, p.y - tower.y) <= spec.range) {
         shieldReduction = Math.max(shieldReduction, spec.towerShieldReduction);
       }
     }
 
-    const dmg = Math.max(1, Math.round(rawDamage * (1 - shieldReduction)));
-    tower.hp -= dmg;
+    let dmg = Math.max(1, Math.round(rawDamage * (1 - shieldReduction)));
+
+    // Energy Shield absorption first
+    if (tower.shield > 0) {
+      const absorbed = Math.min(tower.shield, dmg);
+      tower.shield -= absorbed;
+      dmg -= absorbed;
+      if (absorbed >= 1) {
+        this.effects.spawnSparks(tower.wx, 1.5, tower.wz, 3, 0x2dd4bf);
+        if (dmg <= 0 && Math.random() < 0.6) {
+          this.spawnFloatingText(tower.wx, 2.5, tower.wz, `-${Math.round(absorbed)} ESCUDO`, '#2dd4bf');
+        }
+      }
+    }
+
+    if (dmg > 0) {
+      tower.hp -= dmg;
+      if (Math.random() < 0.72) {
+        this.spawnFloatingText(tower.wx, 2.6, tower.wz, `-${Math.round(dmg)} HP`, '#fb923c');
+      }
+    }
 
     if (burnDps > 0 && burnDuration > 0) {
       tower.burnDps = Math.max(tower.burnDps, burnDps);
       tower.burnTimer = Math.max(tower.burnTimer, burnDuration);
     }
-
-    if (Math.random() < 0.75) {
-      this.spawnFloatingText(tower.wx, 2.6, tower.wz, `-${dmg} HP`, '#fb923c');
+    if (corrosionDps > 0 && corrosionDuration > 0) {
+      tower.corrosionDps = Math.max(tower.corrosionDps, corrosionDps);
+      tower.corrosionTimer = Math.max(tower.corrosionTimer, corrosionDuration);
+    }
+    if (chillSlow > 0 && chillDuration > 0) {
+      tower.chillSlow = Math.max(tower.chillSlow, chillSlow);
+      tower.chillTimer = Math.max(tower.chillTimer, chillDuration);
+    }
+    if (empDisableDuration > 0 && !tower.def.isBarrier) {
+      const hasEmpProtect = this.towers.some((p) => {
+        if (p === tower || p.empDisabledTimer > 0) return false;
+        if (!p.def.isIronDome && p.defId !== 'ew_crew') return false;
+        const pSpec = getTowerLevelSpec(p.def, p.level, p.specialization);
+        return Math.hypot(p.x - tower.x, p.y - tower.y) <= (pSpec?.range || 160);
+      });
+      if (!hasEmpProtect) {
+        tower.empDisabledTimer = Math.max(tower.empDisabledTimer, empDisableDuration);
+        this.spawnFloatingText(tower.wx, 2.9, tower.wz, 'EMP!', '#c084fc');
+      }
     }
 
     if (tower.hp <= 0) {
       tower.hp = 0;
-      this.effects.spawnExplosion(tower.wx, 1.0, tower.wz, 1.65, 0xef4444, true);
-      this.effects.spawnCrater(tower.wx, tower.wz, 1.2);
-      audio.playExplosion(1.35);
-      this.addTrauma(0.42);
+      const emergencyScrap = Math.max(15, Math.round(tower.effectiveCost * 0.3));
+      this.addActorBudget(tower.ownerId, emergencyScrap);
+      this.effects.spawnExplosion(tower.wx, 1.0, tower.wz, 1.5, 0xef4444, true);
+      this.effects.spawnCrater(tower.wx, tower.wz, 1.15);
+      audio.playExplosion(1.25);
+      if (multiplayer.isHost()) {
+        multiplayer.queueCombatEvent({
+          kind: 'EXPLODE',
+          wx: Number(tower.wx.toFixed(2)),
+          wy: 1.0,
+          wz: Number(tower.wz.toFixed(2)),
+          scale: 1.5,
+          color: 0xef4444
+        });
+      }
+      this.addTrauma(0.38);
       this.triggerFlashLight(tower.wx, 2.2, tower.wz, 0xff6b2b, 6.0, 0.14);
-      this.pushRadio(`🚨 DEFESA DESTRUÍDA! ${tower.def.name} caiu em combate!`, 'alert');
-      this.spawnFloatingText(tower.wx, 3.0, tower.wz, 'TORRE DESTRUÍDA!', '#ef4444');
+      this.pushRadio(
+        `🚨 ${tower.def.name} caiu! Sucata recuperada (+$${emergencyScrap}). Clique nos escombros para reconstruir.`,
+        'alert'
+      );
+      this.spawnFloatingText(tower.wx, 3.0, tower.wz, `DESTRUÍDA (+$${emergencyScrap})`, '#ef4444');
+
+      // Leave clickable rebuildable ruin (keep cap at 20)
+      if (!this.destroyedRuins.some((r) => r.col === tower.col && r.row === tower.row)) {
+        if (this.destroyedRuins.length >= 20) {
+          const old = this.destroyedRuins.shift()!;
+          this.scene.remove(old.mesh);
+        }
+        const ruinMesh = new THREE.Mesh(this.ruinGeo, this.ruinMat);
+        ruinMesh.position.set(tower.wx, 0.22, tower.wz);
+        this.scene.add(ruinMesh);
+        this.destroyedRuins.push({
+          col: tower.col,
+          row: tower.row,
+          wx: tower.wx,
+          wz: tower.wz,
+          defId: tower.defId,
+          level: tower.level,
+          specialization: tower.specialization,
+          rebuildCost: Math.max(25, Math.round(tower.totalInvested * 0.55)),
+          mesh: ruinMesh,
+          life: 0
+        });
+      }
+
       this.removeTowerFromMap(tower);
-      this.saveCurrentMissionSnapshot(true);
+      if (!multiplayer.isActive()) this.saveCurrentMissionSnapshot(true);
     } else if (this.selectedTower === tower) {
       bus.emit('hud:selectedTower', this.serializeTower(tower));
     }
@@ -2791,6 +5256,9 @@ export class Battlefield3D {
       this.victory = false;
       saveManager.clearActiveMission();
       this.pushRadio('FOB DESTRUÍDA! Linha de defesa rompida.', 'alert');
+      if (multiplayer.isHost()) {
+        this.broadcastCoopSnapshot();
+      }
       bus.emit('hud:gameover', {
         victory: false,
         wave: this.currentWave,
@@ -2836,17 +5304,103 @@ export class Battlefield3D {
     }
   }
 
+  private addTransientBeam(from: THREE.Vector3, to: THREE.Vector3, color: number, life = 0.22) {
+    if (this.transientBeams.length >= 48) {
+      const oldest = this.transientBeams.shift()!;
+      this.scene.remove(oldest.line);
+      oldest.line.geometry.dispose();
+      (oldest.line.material as THREE.Material).dispose();
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 });
+    const line = new THREE.Line(geo, mat);
+    this.scene.add(line);
+    this.transientBeams.push({ line, life });
+  }
+
+  private deployMineFromTower(tower: TowerEntity, spec: any) {
+    const ownedCount = this.activeMines.filter((m) => m.sourceTower === tower).length;
+    const maxMines = spec.maxMines || 4;
+    if (ownedCount >= maxMines) return false;
+
+    const candidates: Array<{ col: number; row: number; score: number }> = [];
+    const maxTileR = Math.ceil((spec.range || 160) / TILE_SIZE);
+    for (let dr = -maxTileR; dr <= maxTileR; dr++) {
+      for (let dc = -maxTileR; dc <= maxTileR; dc++) {
+        const col = tower.col + dc;
+        const row = tower.row + dr;
+        if (!this.pathfinder.inBounds(col, row)) continue;
+        const cell = this.pathfinder.baseTerrain[row][col];
+        if (cell !== CELL.ROAD && cell !== CELL.OPEN && cell !== CELL.SPAWN) continue;
+        if (this.towerGrid[row][col]) continue;
+        const cx = (col + 0.5) * TILE_SIZE;
+        const cy = (row + 0.5) * TILE_SIZE;
+        const dist = Math.hypot(cx - tower.x, cy - tower.y);
+        if (dist > (spec.range || 160)) continue;
+        if (this.activeMines.some((m) => Math.hypot(m.x - cx, m.y - cy) < 22)) continue;
+        // Prefer road tiles closer to active paths
+        let score = cell === CELL.ROAD ? -1000 : 0;
+        score += Math.random() * 40 + dist * 0.15;
+        candidates.push({ col, row, score });
+      }
+    }
+
+    if (candidates.length === 0) return false;
+    candidates.sort((a, b) => a.score - b.score);
+    const chosen = candidates[0];
+    const x = (chosen.col + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 14;
+    const y = (chosen.row + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 14;
+    const wx = simToWorldX(x);
+    const wz = simToWorldZ(y);
+    const isEmp = spec.damageType === 'emp';
+    const mesh = new THREE.Mesh(this.mineGeo, isEmp ? this.empMineMat : this.mineMat);
+    mesh.position.set(wx, 0.12, wz);
+    this.scene.add(mesh);
+
+    this.activeMines.push({
+      x,
+      y,
+      wx,
+      wz,
+      damage: spec.damage || 220,
+      damageType: spec.damageType || 'explosive',
+      splashRadius: spec.splashRadius || 76,
+      stunDuration: spec.stunDuration || 0,
+      slowFactor: spec.slowFactor || 0,
+      slowDuration: spec.slowDuration || 0,
+      burnDps: spec.burnDps || 0,
+      burnDuration: spec.burnDuration || 0,
+      heavyMultiplier: spec.heavyMultiplier || 1,
+      markedAmp: spec.markedAmp || 0,
+      sourceTower: tower,
+      mesh
+    });
+
+    this.effects.spawnSparks(wx, 0.4, wz, 2, isEmp ? 0xc084fc : 0xf59e0b);
+    return true;
+  }
+
   private updateTowers(dt: number) {
     for (const tower of this.towers) {
-      // Burn & smoke damage visuals for all towers
+      // Continuous thermal / corrosive debuffs & low-HP smoke
       if (tower.burnTimer > 0) {
-        tower.burnTimer -= dt;
-        const bDmg = tower.burnDps * dt;
-        tower.hp -= bDmg;
+        tower.burnTimer = Math.max(0, tower.burnTimer - dt);
+        tower.hp -= tower.burnDps * dt;
         if (tower.hp <= 0) {
           this.damageTower(tower, 1);
           continue;
         }
+      }
+      if (tower.corrosionTimer > 0) {
+        tower.corrosionTimer = Math.max(0, tower.corrosionTimer - dt);
+        tower.hp -= (tower.corrosionDps || 10) * dt;
+        if (tower.hp <= 0) {
+          this.damageTower(tower, 1);
+          continue;
+        }
+      }
+      if (tower.chillTimer > 0) {
+        tower.chillTimer = Math.max(0, tower.chillTimer - dt);
       }
 
       if (tower.hp < tower.maxHp * 0.4) {
@@ -2869,59 +5423,30 @@ export class Battlefield3D {
       tower.trophyTimer = Math.max(0, tower.trophyTimer - dt);
       tower.interceptTimer = Math.max(0, tower.interceptTimer - dt);
 
-      // Iron Dome continuous healing & radar rotation
-      if (tower.def.isIronDome) {
-        if (tower.rig.radarPivots) {
-          tower.rig.radarPivots.forEach((p) => (p.rotation.y += dt * 3.0));
-        }
-        if (tower.rig.ewRings) {
-          tower.rig.ewRings.forEach((r) => {
-            const phase = (this.elapsedReal * 1.2) % 1;
-            r.scale.setScalar(0.85 + phase * 0.45);
-          });
-        }
-        if (tower.ewPulseMesh) {
-          const rangeW = spec.range * WORLD_SCALE;
-          const p = (this.elapsedReal * 0.65) % 1;
-          tower.ewPulseMesh.scale.setScalar(Math.max(0.05, p * rangeW));
-          (tower.ewPulseMesh.material as THREE.MeshBasicMaterial).opacity = 0.3 * (1 - p);
-        }
-        if (spec.healPerSec > 0) {
-          for (const ally of this.towers) {
-            if (ally.hp < ally.maxHp && Math.hypot(ally.x - tower.x, ally.y - tower.y) <= spec.range) {
-              ally.hp = Math.min(ally.maxHp, ally.hp + spec.healPerSec * dt);
-            }
-          }
-        }
-      }
-
       if (tower.def.isBarrier || tower.def.isSupportAura) continue;
 
       tower.cooldownTimer = Math.max(0, tower.cooldownTimer - dt);
-      tower.recoil = Math.max(0, tower.recoil - dt * 1.4);
 
-      if (tower.muzzleFlashTimer > 0) {
-        tower.muzzleFlashTimer -= dt;
-        if (tower.rig.muzzleFlashMesh) {
-          tower.rig.muzzleFlashMesh.visible = tower.muzzleFlashTimer > 0;
-          if (tower.muzzleFlashTimer > 0) {
-            tower.rig.muzzleFlashMesh.rotation.z += dt * 45;
+      if (tower.defId === 'minefield' || tower.def.isMineLayer) {
+        if (tower.cooldownTimer <= 0 && spec.fireRate > 0) {
+          if (this.deployMineFromTower(tower, spec)) {
+            tower.cooldownTimer = 1 / spec.fireRate;
+          } else {
+            tower.cooldownTimer = 0.5;
           }
         }
-      } else if (tower.rig.muzzleFlashMesh && tower.rig.muzzleFlashMesh.visible) {
-        tower.rig.muzzleFlashMesh.visible = false;
+        continue;
       }
+
+      this.decayTowerWeaponVisuals(tower, dt);
 
       if (tower.rig.missileCaps && spec.fireRate > 0) {
         const showMissile = tower.cooldownTimer < 1 / spec.fireRate - 0.35;
         tower.rig.missileCaps.forEach((m) => (m.visible = showMissile));
       }
 
-      if (tower.rig.barrelPivot) {
-        if ((tower.rig.barrelPivot as any)._baseZ === undefined) {
-          (tower.rig.barrelPivot as any)._baseZ = tower.rig.barrelPivot.position.z;
-        }
-        tower.rig.barrelPivot.position.z = (tower.rig.barrelPivot as any)._baseZ - tower.recoil;
+      if (tower.defId === 'cryo_tower' && spec.isCryoAura) {
+        continue;
       }
 
       const candidates = this.findTargetsInRange(tower, spec);
@@ -2969,13 +5494,12 @@ export class Battlefield3D {
 
       const angleDiff = angleDiffAbs(desiredAngle, tower.turretAngle);
 
-      // Continuous HELIOS Directed-Energy Laser Beam logic
       if (tower.def.isContinuousLaser) {
         this.updateHeliosLaserTower(tower, spec, candidates, dt, angleDiff < 0.55);
         continue;
       }
 
-      if (tower.cooldownTimer <= 0 && angleDiff < 0.45) {
+      if (tower.cooldownTimer <= 0 && angleDiff < 0.45 && spec.fireRate > 0) {
         tower.cooldownTimer = 1 / spec.fireRate;
         this.triggerTowerAttack(tower, spec, candidates);
       }
@@ -3046,6 +5570,21 @@ export class Battlefield3D {
         this.applyDamageToEnemy(target, dmg, 'laser', tower, { allowApsIntercept: false });
         this.effects.spawnSparks(target.wx, target.wy + 0.7, target.wz, 1, 0x38bdf8);
       }
+      if (multiplayer.isHost() && candidates[0]) {
+        const primary = candidates[0];
+        multiplayer.queueCombatEvent({
+          kind: 'FIRE',
+          towerId: tower.id,
+          targetId: primary.id,
+          wx: Number(mPos.x.toFixed(2)),
+          wy: Number(mPos.y.toFixed(2)),
+          wz: Number(mPos.z.toFixed(2)),
+          targetX: Number(primary.wx.toFixed(2)),
+          targetZ: Number(primary.wz.toFixed(2)),
+          damageType: 'helios_laser',
+          ownerId: tower.ownerId
+        });
+      }
     }
   }
 
@@ -3053,10 +5592,12 @@ export class Battlefield3D {
     const matches: EnemyEntity[] = [];
     const rangeSq = spec.range * spec.range;
     const minRangeSq = (spec.minRange || 0) * (spec.minRange || 0);
+    const canHitBurrowed = (spec.splashRadius || 0) >= 40;
 
     this.enemyPool.forEachActive((obj) => {
       const e = obj as EnemyEntity;
       if (e.isStealth && !e.stealthRevealed) return;
+      if (e.isBurrowed && !e.stealthRevealed && !canHitBurrowed) return;
       if (tower.def.domain === 'ground' && e.domain !== 'ground') return;
       if (tower.def.domain === 'air' && e.domain !== 'air') return;
 
@@ -3096,9 +5637,187 @@ export class Battlefield3D {
     );
   }
 
+  private fireChainTesla(tower: TowerEntity, spec: any, primary: EnemyEntity) {
+    const mPos = this.getTowerMuzzleWorld(tower);
+    const maxJumps = spec.chainCount || 4;
+    const jumpRange = spec.chainRange || 130;
+    const decay = spec.chainDecay ?? 0.14;
+    const hitSet = new Set<EnemyEntity>();
+    let current: EnemyEntity | null = primary;
+    let prevPos = mPos;
+    let dmg = spec.damage;
+
+    for (let hop = 0; hop < maxJumps && current; hop++) {
+      hitSet.add(current);
+      const tPos = new THREE.Vector3(current.wx, current.wy + 0.75, current.wz);
+      const mid = prevPos.clone().lerp(tPos, 0.5);
+      mid.x += (Math.random() - 0.5) * 1.2;
+      mid.y += 0.4 + Math.random() * 0.5;
+      mid.z += (Math.random() - 0.5) * 1.2;
+      this.addTransientBeam(prevPos, mid, 0x60a5fa, 0.18);
+      this.addTransientBeam(mid, tPos, 0x93c5fd, 0.18);
+      this.effects.spawnSparks(tPos.x, tPos.y, tPos.z, 3, 0x60a5fa);
+
+      this.applyDamageToEnemy(current, dmg, spec.damageType || 'electric', tower, {
+        allowApsIntercept: false,
+        ignoreFrontalShield: true
+      });
+      if (spec.stunDuration > 0 && (current.isMechanized || current.maxShield > 0)) {
+        current.stunTimer = Math.max(current.stunTimer, spec.stunDuration);
+      }
+
+      // Find next nearest un-hit target within chainRange
+      let bestNext: EnemyEntity | null = null;
+      let bestDist = jumpRange;
+      const curX = current.x;
+      const curY = current.y;
+      this.enemyPool.forEachActive((obj) => {
+        const cand = obj as EnemyEntity;
+        if (hitSet.has(cand) || (cand.isStealth && !cand.stealthRevealed)) return;
+        const d = Math.hypot(cand.x - curX, cand.y - curY);
+        if (d <= bestDist) {
+          bestDist = d;
+          bestNext = cand;
+        }
+      });
+
+      prevPos = tPos;
+      current = bestNext;
+      dmg = Math.max(10, dmg * (1 - decay));
+    }
+  }
+
+  private firePiercingBeam(tower: TowerEntity, spec: any, primary: EnemyEntity) {
+    const mPos = this.getTowerMuzzleWorld(tower);
+    const dx = primary.x - tower.x;
+    const dy = primary.y - tower.y;
+    const baseDist = Math.max(1, Math.hypot(dx, dy));
+    const ux = dx / baseDist;
+    const uy = dy / baseDist;
+    const maxLen = Math.max(spec.range * 1.15, 520);
+    const corridor = tower.defId === 'railgun' ? 28 : 18;
+    const pierceMax = spec.pierceCount || 1;
+
+    const alongList: Array<{ enemy: EnemyEntity; t: number }> = [];
+    this.enemyPool.forEachActive((obj) => {
+      const e = obj as EnemyEntity;
+      if (e.isStealth && !e.stealthRevealed) return;
+      if (tower.def.domain === 'ground' && e.domain !== 'ground') return;
+      if (tower.def.domain === 'air' && e.domain !== 'air') return;
+      const rx = e.x - tower.x;
+      const ry = e.y - tower.y;
+      const proj = rx * ux + ry * uy;
+      if (proj < -12 || proj > maxLen) return;
+      const perp = Math.abs(rx * uy - ry * ux);
+      if (perp <= corridor + e.radius * 0.55) {
+        alongList.push({ enemy: e, t: proj });
+      }
+    });
+    alongList.sort((a, b) => a.t - b.t);
+    const hits = alongList.slice(0, pierceMax);
+    if (hits.length === 0) hits.push({ enemy: primary, t: baseDist });
+
+    const lastEnemy = hits[hits.length - 1].enemy;
+    const endDist = pierceMax > 1 ? Math.max(baseDist, hits[hits.length - 1].t + 35) : baseDist;
+    const endPos = new THREE.Vector3(
+      simToWorldX(tower.x + ux * endDist),
+      Math.max(0.7, lastEnemy.wy + 0.6),
+      simToWorldZ(tower.y + uy * endDist)
+    );
+    const beamColor = tower.defId === 'railgun' ? 0x38bdf8 : 0xfef08a;
+    this.addTransientBeam(mPos, endPos, beamColor, tower.defId === 'railgun' ? 0.24 : 0.14);
+
+    for (let i = 0; i < hits.length; i++) {
+      const target = hits[i].enemy;
+      const mult = i === 0 ? 1.0 : Math.max(0.55, 1 - i * 0.14);
+      this.applyDamageToEnemy(target, spec.damage * mult, spec.damageType || 'piercing', tower, {
+        armorPierce: spec.armorPierce || 0,
+        armorIgnore: spec.armorIgnore || 0,
+        heavyMultiplier: spec.heavyMultiplier || 1,
+        tandemHeat: !!spec.tandemHeat,
+        critChance: spec.critChance || 0,
+        critMultiplier: spec.critMultiplier || 1.65,
+        allowApsIntercept: false
+      });
+      if (spec.corrosionAmount > 0) {
+        target.corrosionReduction = Math.min(0.85, Math.max(target.corrosionReduction, spec.corrosionAmount));
+        target.corrosionTimer = Math.max(target.corrosionTimer, 5.0);
+      }
+      if (spec.stunDuration > 0 && target._pooledActive) {
+        target.stunTimer = Math.max(target.stunTimer, spec.stunDuration);
+      }
+      this.effects.spawnSparks(target.wx, target.wy + 0.7, target.wz, 4, beamColor);
+    }
+  }
+
+  private fireConeFlamethrower(tower: TowerEntity, spec: any, primary: EnemyEntity) {
+    const mPos = this.getTowerMuzzleWorld(tower);
+    const halfCone = (spec.coneAngle || 1.0) * 0.5;
+    const range = spec.range || 210;
+
+    // Flame jet visual burst along cone centerline & edges
+    for (let s = -1; s <= 1; s++) {
+      const ang = tower.turretAngle + s * halfCone * 0.7;
+      const tip = new THREE.Vector3(
+        mPos.x + Math.sin(ang) * range * WORLD_SCALE * 0.85,
+        0.55,
+        mPos.z + Math.cos(ang) * range * WORLD_SCALE * 0.85
+      );
+      this.addTransientBeam(mPos, tip, s === 0 ? 0xfb923c : 0xf97316, 0.16);
+    }
+    this.effects.spawnSparks(mPos.x, mPos.y, mPos.z, 5, 0xf97316);
+
+    this.enemyPool.forEachActive((obj) => {
+      const e = obj as EnemyEntity;
+      if (e.domain !== 'ground' || (e.isStealth && !e.stealthRevealed)) return;
+      const dx = e.x - tower.x;
+      const dy = e.y - tower.y;
+      const d = Math.hypot(dx, dy);
+      if (d > range + 15) return;
+      const enemyAng = Math.atan2(dx, dy);
+      if (angleDiffAbs(enemyAng, tower.turretAngle) <= halfCone + 0.14) {
+        this.applyDamageToEnemy(e, spec.damage, 'fire', tower, {
+          allowApsIntercept: false,
+          isSplash: true
+        });
+        if (spec.burnDps > 0 && e._pooledActive) {
+          e.burnDps = Math.max(e.burnDps, spec.burnDps);
+          e.burnTimer = Math.max(e.burnTimer, spec.burnDuration || 4.0);
+          e.burnSourceTower = tower;
+        }
+        if (spec.thermalVuln > 0) {
+          e.thermalVuln = Math.max(e.thermalVuln, spec.thermalVuln);
+        }
+        if (spec.slowFactor > 0 && !e.slowImmune) {
+          e.cryoSlow = Math.max(e.cryoSlow, spec.slowFactor);
+          e.cryoSlowTimer = Math.max(e.cryoSlowTimer, spec.slowDuration || 2.0);
+        }
+      }
+    });
+
+    if (spec.createsFireZone) {
+      this.spawnFireZone(primary.x, primary.y, spec.splashRadius || 80, (spec.burnDps || 90) * 0.65, 3.0, 'fire', 0, tower.ownerId);
+    }
+  }
+
   private triggerTowerAttack(tower: TowerEntity, spec: any, candidates: EnemyEntity[]) {
     const primary = candidates[0];
     const mPos = this.getTowerMuzzleWorld(tower);
+
+    if (multiplayer.isHost() && primary) {
+      multiplayer.queueCombatEvent({
+        kind: 'FIRE',
+        towerId: tower.id,
+        targetId: primary.id,
+        wx: Number(mPos.x.toFixed(2)),
+        wy: Number(mPos.y.toFixed(2)),
+        wz: Number(mPos.z.toFixed(2)),
+        targetX: Number(primary.wx.toFixed(2)),
+        targetZ: Number(primary.wz.toFixed(2)),
+        damageType: tower.defId,
+        ownerId: tower.ownerId
+      });
+    }
 
     if (tower.defId === 'm2_bunker') {
       tower.recoil = 0.16;
@@ -3106,6 +5825,56 @@ export class Battlefield3D {
       audio.playShot(tower.level >= 2 ? 'ciws' : 'mg50');
       this.effects.spawnSparks(mPos.x, mPos.y, mPos.z, 2, 0xfef08a);
       this.fireTowerProjectile(tower, primary, spec, 0);
+    } else if (tower.defId === 'ballista') {
+      tower.recoil = 0.22;
+      tower.muzzleFlashTimer = 0.05;
+      audio.playShot('ballista');
+      this.effects.spawnSparks(mPos.x, mPos.y, mPos.z, 2, 0xfbbf24);
+      const count = spec.multiTargets || 1;
+      for (let i = 0; i < count; i++) {
+        const tgt = candidates[i % candidates.length];
+        this.fireTowerProjectile(tower, tgt, spec, count > 1 ? (i - (count - 1) / 2) * 0.12 : 0);
+      }
+    } else if (tower.defId === 'sniper_tower' || tower.defId === 'railgun') {
+      tower.recoil = tower.defId === 'railgun' ? 0.45 : 0.32;
+      tower.muzzleFlashTimer = 0.09;
+      audio.playShot(tower.defId === 'railgun' ? 'railgun' : 'sniper');
+      if (tower.defId === 'railgun') {
+        this.addTrauma(0.18);
+        this.triggerFlashLight(mPos.x, mPos.y, mPos.z, 0x38bdf8, 5.5, 0.08);
+      }
+      this.firePiercingBeam(tower, spec, primary);
+    } else if (tower.defId === 'tesla_tower') {
+      tower.muzzleFlashTimer = 0.09;
+      audio.playShot('tesla');
+      this.effects.spawnSparks(mPos.x, mPos.y, mPos.z, 4, 0x60a5fa);
+      this.fireChainTesla(tower, spec, primary);
+    } else if (tower.defId === 'flamethrower') {
+      tower.recoil = 0.08;
+      tower.muzzleFlashTimer = 0.08;
+      audio.playShot('flame');
+      this.fireConeFlamethrower(tower, spec, primary);
+    } else if (tower.defId === 'cryo_tower') {
+      tower.muzzleFlashTimer = 0.08;
+      audio.playShot('cryo');
+      this.effects.spawnSparks(mPos.x, mPos.y, mPos.z, 3, 0x7dd3fc);
+      this.fireTowerProjectile(tower, primary, spec, 0);
+    } else if (tower.defId === 'toxic_tower') {
+      tower.recoil = 0.2;
+      tower.muzzleFlashTimer = 0.07;
+      audio.playShot('toxic');
+      this.effects.spawnSparks(mPos.x, mPos.y, mPos.z, 3, 0x84cc16);
+      this.fireTowerProjectile(tower, primary, spec, 0);
+    } else if (tower.defId === 'harpoon_tower') {
+      tower.recoil = 0.26;
+      tower.muzzleFlashTimer = 0.06;
+      audio.playShot('ballista');
+      const count = spec.multiTargets || 1;
+      for (let i = 0; i < Math.min(count, candidates.length); i++) {
+        const tgt = candidates[i];
+        this.addTransientBeam(mPos, new THREE.Vector3(tgt.wx, tgt.wy + 0.6, tgt.wz), 0xf59e0b, 0.25);
+        this.fireTowerProjectile(tower, tgt, spec, 0);
+      }
     } else if (tower.defId === 'bushmaster') {
       tower.recoil = 0.28;
       tower.muzzleFlashTimer = 0.065;
@@ -3141,7 +5910,7 @@ export class Battlefield3D {
       tower.recoil = 0.42;
       tower.muzzleFlashTimer = 0.12;
       audio.playShot(tower.defId === 'tos1_mlrs' ? 'missile' : 'howitzer');
-      this.addTrauma(tower.level === 3 ? 0.32 : 0.2);
+      this.addTrauma(tower.level >= 4 ? 0.3 : 0.2);
       this.triggerFlashLight(mPos.x, mPos.y, mPos.z, 0xff7b22, 6.0, 0.1);
       this.effects.spawnExplosion(mPos.x, mPos.y, mPos.z, 0.55, 0xf97316, false);
       const count = spec.salvoCount || 1;
@@ -3162,7 +5931,7 @@ export class Battlefield3D {
           });
         }
       }
-    } else if (tower.defId === 'patriot' || tower.defId === 'iron_dome') {
+    } else if (tower.defId === 'patriot') {
       tower.recoil = 0.16;
       tower.muzzleFlashTimer = 0.09;
       audio.playShot('missile');
@@ -3171,6 +5940,11 @@ export class Battlefield3D {
       for (let i = 0; i < Math.min(maxTargets, candidates.length); i++) {
         this.fireTowerProjectile(tower, candidates[i], spec, (i - 1) * 0.14);
       }
+    } else {
+      tower.recoil = 0.14;
+      tower.muzzleFlashTimer = 0.05;
+      audio.playShot('mg50');
+      this.fireTowerProjectile(tower, primary, spec, 0);
     }
   }
 
@@ -3191,6 +5965,7 @@ export class Battlefield3D {
     p.x = worldToSimX(mPos.x);
     p.y = worldToSimY(mPos.z);
     p.sourceTower = tower;
+    p.ownerId = tower.ownerId;
     p.damage = spec.damage;
     p.damageType = spec.damageType;
     p.armorPierce = spec.armorPierce || 0;
@@ -3198,9 +5973,22 @@ export class Battlefield3D {
     p.heavyMultiplier = spec.heavyMultiplier || 1;
     p.tandemHeat = !!spec.tandemHeat;
     p.critChance = spec.critChance || 0;
+    p.critMultiplier = spec.critMultiplier || 1.6;
     p.splashRadius = spec.splashRadius || 0;
     p.burnDps = spec.burnDps || 0;
     p.burnDuration = spec.burnDuration || 0;
+    p.poisonDps = spec.poisonDps || 0;
+    p.poisonDuration = spec.poisonDuration || 0;
+    p.corrosionAmount = spec.corrosionAmount || 0;
+    p.slowFactor = spec.slowFactor || 0;
+    p.slowDuration = spec.slowDuration || 0;
+    p.freezeDuration = spec.freezeDuration || 0;
+    p.rootDuration = spec.rootDuration || 0;
+    p.markedAmp = spec.markedAmp || 0;
+    p.thermalVuln = spec.thermalVuln || 0;
+    p.createsToxicZone = !!spec.createsToxicZone;
+    p.allowApsBypass = !!spec.allowApsBypass;
+    (p as any).stunDuration = spec.stunDuration || 0;
     p.speed = tower.def.projectileSpeed || 800;
     p.smokeTimer = 0;
     p.flightTime = 0;
@@ -3224,7 +6012,7 @@ export class Battlefield3D {
       this.scene.add(mMesh);
       p.mesh = mMesh;
       mMesh.position.set(p.wx, p.wy, p.wz);
-    } else if (tower.defId === 'patriot' || tower.defId === 'iron_dome') {
+    } else if (tower.defId === 'patriot') {
       p.kind = 'sam';
       p.isMissile = true;
       p.isTopAttack = false;
@@ -3246,7 +6034,7 @@ export class Battlefield3D {
       p.mesh = mMesh;
       mMesh.position.set(p.wx, p.wy, p.wz);
     } else if (tower.defId === 'howitzer' || tower.defId === 'tos1_mlrs') {
-      p.kind = spec.damageType === 'he_rocket' || spec.damageType === 'thermobaric' ? 'rocket' : 'shell';
+      p.kind = tower.defId === 'tos1_mlrs' || spec.damageType === 'he_rocket' || spec.damageType === 'thermobaric' ? 'rocket' : 'shell';
       p.isMissile = p.kind === 'rocket';
       p.isTopAttack = false;
       p.isArtillery = true;
@@ -3277,7 +6065,8 @@ export class Battlefield3D {
       }
       p.mesh.position.set(p.wx, p.wy, p.wz);
     } else {
-      p.kind = tower.defId === 'bushmaster' || tower.defId === 'abrams_pit' ? 'sabot' : 'bullet';
+      const isBoltOrSabot = tower.defId === 'bushmaster' || tower.defId === 'abrams_pit' || tower.defId === 'ballista' || tower.defId === 'harpoon_tower';
+      p.kind = isBoltOrSabot ? 'sabot' : 'bullet';
       p.isMissile = false;
       p.isTopAttack = false;
       p.isArtillery = false;
@@ -3299,9 +6088,15 @@ export class Battlefield3D {
       p.life = 1.2;
 
       const mesh = p.mesh as THREE.Mesh;
-      mesh.material = p.kind === 'sabot' ? this.sabotMat : this.bulletMat;
-      const sc = tower.defId === 'abrams_pit' ? 2.2 : p.kind === 'sabot' ? 1.5 : 1.0;
-      mesh.scale.set(sc, sc, p.kind === 'sabot' ? 1.6 : 1.0);
+      if (tower.defId === 'cryo_tower') {
+        mesh.material = ((this as any).cryoMat ??= new THREE.MeshBasicMaterial({ color: 0x7dd3fc }));
+      } else if (tower.defId === 'toxic_tower') {
+        mesh.material = ((this as any).toxicProjMat ??= new THREE.MeshBasicMaterial({ color: 0x84cc16 }));
+      } else {
+        mesh.material = p.kind === 'sabot' ? this.sabotMat : this.bulletMat;
+      }
+      const sc = tower.defId === 'abrams_pit' ? 2.2 : tower.defId === 'cryo_tower' || tower.defId === 'toxic_tower' ? 1.85 : p.kind === 'sabot' ? 1.5 : 1.0;
+      mesh.scale.set(sc, sc, p.kind === 'sabot' ? 1.7 : 1.0);
       mesh.position.copy(mPos);
       mesh.lookAt(mPos.x + p.vx, mPos.y + p.vy, mPos.z + p.vz);
       mesh.visible = true;
@@ -3460,6 +6255,44 @@ export class Battlefield3D {
     });
   }
 
+  private applyProjectileStatusEffects(p: ProjectileEntity, enemy: EnemyEntity) {
+    if (!enemy || !enemy._pooledActive) return;
+    if (p.burnDps > 0 && p.burnDuration > 0) {
+      enemy.burnDps = Math.max(enemy.burnDps, p.burnDps);
+      enemy.burnTimer = Math.max(enemy.burnTimer, p.burnDuration);
+      enemy.burnSourceTower = p.sourceTower;
+    }
+    if (p.poisonDps > 0 && p.poisonDuration > 0) {
+      enemy.poisonDps = Math.max(enemy.poisonDps, p.poisonDps);
+      enemy.poisonTimer = Math.max(enemy.poisonTimer, p.poisonDuration);
+      enemy.poisonSourceTower = p.sourceTower;
+    }
+    if (p.corrosionAmount > 0) {
+      enemy.corrosionReduction = Math.min(0.85, Math.max(enemy.corrosionReduction, p.corrosionAmount));
+      enemy.corrosionTimer = Math.max(enemy.corrosionTimer, 5.0);
+    }
+    if (p.slowFactor > 0 && !enemy.slowImmune) {
+      enemy.cryoSlow = Math.max(enemy.cryoSlow, p.slowFactor);
+      enemy.cryoSlowTimer = Math.max(enemy.cryoSlowTimer, p.slowDuration || 2.2);
+    }
+    if (p.freezeDuration > 0 && !enemy.slowImmune) {
+      enemy.stunTimer = Math.max(enemy.stunTimer, p.freezeDuration);
+    }
+    if ((p as any).stunDuration > 0) {
+      enemy.stunTimer = Math.max(enemy.stunTimer, (p as any).stunDuration);
+    }
+    if (p.rootDuration > 0) {
+      enemy.rootTimer = Math.max(enemy.rootTimer, p.rootDuration);
+    }
+    if (p.markedAmp > 0) {
+      enemy.markedAmp = Math.max(enemy.markedAmp, p.markedAmp);
+      enemy.markedTimer = Math.max(enemy.markedTimer, 4.5);
+    }
+    if (p.thermalVuln > 0) {
+      enemy.thermalVuln = Math.max(enemy.thermalVuln, p.thermalVuln);
+    }
+  }
+
   private impactSingleEnemy(p: ProjectileEntity, enemy: EnemyEntity) {
     const res = this.applyDamageToEnemy(enemy, p.damage, p.damageType, p.sourceTower, {
       armorPierce: p.armorPierce,
@@ -3467,7 +6300,10 @@ export class Battlefield3D {
       heavyMultiplier: p.heavyMultiplier,
       tandemHeat: p.tandemHeat,
       critChance: p.critChance,
-      isMissile: p.isMissile
+      critMultiplier: p.critMultiplier,
+      isMissile: p.isMissile,
+      allowApsIntercept: !p.allowApsBypass,
+      actorId: p.ownerId
     });
 
     if (res.apsIntercepted) {
@@ -3477,7 +6313,14 @@ export class Battlefield3D {
       return;
     }
 
+    this.applyProjectileStatusEffects(p, enemy);
+
     if (p.splashRadius > 0) {
+      p.targetX = enemy.x;
+      p.targetY = enemy.y;
+      p.targetWx = enemy.wx;
+      p.targetWz = enemy.wz;
+      p.targetWy = enemy.wy;
       this.detonateSplash(p, enemy);
     } else if (res.isRicochet) {
       audio.playRicochet();
@@ -3490,28 +6333,58 @@ export class Battlefield3D {
       audio.playExplosion(0.95);
       this.addTrauma(0.18);
     } else {
-      this.effects.spawnSparks(p.wx, p.wy, p.wz, 3, res.isCrit ? 0x38bdf8 : 0xfef08a);
+      const sparkColor =
+        res.isCrit ? 0x38bdf8 : p.damageType === 'ice' || p.damageType === 'cryo' ? 0x7dd3fc : 0xfef08a;
+      this.effects.spawnSparks(p.wx, p.wy, p.wz, 3, sparkColor);
     }
   }
 
   private detonateSplash(p: ProjectileEntity, alreadyHitEnemy: EnemyEntity | null = null) {
     const isBig = p.splashRadius >= 90 || p.kind === 'hellfire';
-    const scale = Math.max(0.75, p.splashRadius / 72);
+    const isToxic = p.damageType === 'poison' || p.damageType === 'toxic' || p.createsToxicZone;
+    const isCryo = p.damageType === 'ice' || p.damageType === 'cryo';
+    const fxColor = isToxic ? 0x84cc16 : isCryo ? 0x7dd3fc : p.kind === 'hellfire' ? 0xef4444 : 0xf97316;
+    const scale = Math.max(0.65, p.splashRadius / 72);
     this.effects.spawnExplosion(
       p.targetWx,
       Math.max(0.4, p.targetWy),
       p.targetWz,
       scale,
-      p.kind === 'hellfire' ? 0xef4444 : 0xf97316,
+      fxColor,
       true
     );
-    if (p.targetWy < 1.5) {
+    if (p.targetWy < 1.5 && !isToxic && !isCryo) {
       this.effects.spawnCrater(p.targetWx, p.targetWz, scale);
     }
-    if (p.burnDps > 0 && p.burnDuration > 0) {
-      this.spawnFireZone(p.targetX, p.targetY, p.splashRadius, p.burnDps, p.burnDuration);
+    if (p.burnDps > 0 && p.burnDuration > 0 && !isToxic) {
+      this.spawnFireZone(p.targetX, p.targetY, p.splashRadius, p.burnDps, p.burnDuration, 'fire', 0, p.ownerId || p.sourceTower?.ownerId);
     }
-    audio.playExplosion(scale);
+    if (p.createsToxicZone) {
+      this.spawnFireZone(
+        p.targetX,
+        p.targetY,
+        Math.max(60, p.splashRadius),
+        Math.max(20, (p.poisonDps || 30) * 0.65),
+        4.2,
+        'poison',
+        p.corrosionAmount || 0.25,
+        p.ownerId || p.sourceTower?.ownerId
+      );
+    }
+    if (!isToxic && !isCryo) {
+      audio.playExplosion(scale);
+    }
+    if (multiplayer.isHost()) {
+      multiplayer.queueCombatEvent({
+        kind: 'EXPLODE',
+        wx: Number(p.targetWx.toFixed(2)),
+        wy: Number(Math.max(0.4, p.targetWy).toFixed(2)),
+        wz: Number(p.targetWz.toFixed(2)),
+        scale: Number(scale.toFixed(2)),
+        color: fxColor,
+        damageType: isToxic || isCryo ? 'silent' : 'explode'
+      });
+    }
 
     if (p.kind === 'hellfire') {
       this.addTrauma(0.55);
@@ -3520,15 +6393,26 @@ export class Battlefield3D {
       this.addTrauma(p.kind === 'rocket' ? 0.32 : 0.24);
     }
 
+    const canHitAir =
+      p.kind === 'hellfire' ||
+      p.damageType === 'aa_missile' ||
+      p.damageType === 'aa' ||
+      p.sourceTower?.def.domain === 'air' ||
+      p.sourceTower?.def.domain === 'both';
+
     const rSq = p.splashRadius * p.splashRadius;
     this.enemyPool.forEachActive((obj) => {
       const e = obj as EnemyEntity;
       if (e === alreadyHitEnemy) return;
-      if (p.kind !== 'hellfire' && p.damageType !== 'aa_missile' && p.damageType !== 'aa' && e.domain === 'air') {
+      if (e.domain === 'air' && !canHitAir) {
         return;
       }
       const dSq = (e.x - p.targetX) ** 2 + (e.y - p.targetY) ** 2;
       if (dSq <= rSq) {
+        if (e.isBurrowed && p.splashRadius >= 45) {
+          e.isBurrowed = false;
+          e.unburrowed = true;
+        }
         const dist = Math.sqrt(dSq);
         const falloff = p.kind === 'hellfire' ? 1.0 : Math.max(0.45, 1 - (dist / p.splashRadius) * 0.55);
         this.applyDamageToEnemy(e, p.damage * falloff, p.damageType, p.sourceTower, {
@@ -3537,9 +6421,13 @@ export class Battlefield3D {
           heavyMultiplier: p.heavyMultiplier,
           tandemHeat: p.tandemHeat,
           critChance: p.critChance,
+          critMultiplier: p.critMultiplier,
           isMissile: p.isMissile,
-          allowApsIntercept: p.kind !== 'hellfire'
+          isSplash: true,
+          allowApsIntercept: p.kind !== 'hellfire' && !p.allowApsBypass,
+          actorId: p.ownerId
         });
+        this.applyProjectileStatusEffects(p, e);
       }
     });
   }
@@ -3551,10 +6439,25 @@ export class Battlefield3D {
     sourceTower: TowerEntity | null,
     opts: any = {}
   ) {
-    if (!enemy || !enemy._pooledActive) return { damage: 0 };
+    if (!enemy || !enemy._pooledActive) return { damage: 0, shieldDamage: 0 };
 
     const res = resolveDamage(enemy, rawDamage, damageType, opts);
-    if (res.apsIntercepted || res.damage <= 0) return res;
+    if (res.apsIntercepted || (res.damage <= 0 && res.shieldDamage <= 0)) return res;
+
+    const actorId = sourceTower?.ownerId || opts?.actorId;
+    if (actorId && (res.damage > 0 || res.shieldDamage > 0)) {
+      enemy.damageByPlayer[actorId] = (enemy.damageByPlayer[actorId] || 0) + res.damage + res.shieldDamage;
+    }
+
+    if (res.shieldDamage > 0) {
+      this.effects.spawnSparks(enemy.wx, enemy.wy + 0.9, enemy.wz, 2, 0x22d3ee);
+      if (res.damage <= 0) {
+        if (sourceTower) sourceTower.totalDamage += res.shieldDamage;
+        this.totalDamage += res.shieldDamage;
+        this.updateEnemyHealthBar(enemy);
+        return res;
+      }
+    }
 
     enemy.hp -= res.damage;
     enemy.hitFlashTimer = 0.07;
@@ -3569,14 +6472,16 @@ export class Battlefield3D {
         }
       });
     }
-    this.totalDamage += res.damage;
+    this.totalDamage += res.damage + res.shieldDamage;
 
     if (sourceTower) {
-      sourceTower.totalDamage += res.damage;
+      sourceTower.totalDamage += res.damage + res.shieldDamage;
     }
 
     if (res.eraBlocked) {
       this.spawnFloatingText(enemy.wx, enemy.wy + 2.4, enemy.wz, 'ERA BLOCK (-40%)', '#fb923c');
+    } else if (res.frontalBlocked && Math.random() < 0.35) {
+      this.spawnFloatingText(enemy.wx, enemy.wy + 2.1, enemy.wz, 'ESCUDO FRONTAL', '#94a3b8');
     } else if (res.isCrit) {
       this.spawnFloatingText(enemy.wx, enemy.wy + 2.2, enemy.wz, `CRIT ${res.damage}`, '#38bdf8');
     }
@@ -3617,14 +6522,42 @@ export class Battlefield3D {
     if (!enemy._pooledActive) return;
 
     this.totalKills += 1;
-    this.budget += enemy.reward;
+    const bonusMult = sourceTower?.allyKillBonus || 0;
+    const totalGold = enemy.reward + Math.round(enemy.reward * bonusMult);
+    const killerId = sourceTower?.ownerId || multiplayer.localPeerId;
+    const connectedIds = multiplayer.isActive()
+      ? multiplayer.getPlayers().filter((p) => p.connected).map((p) => p.peerId)
+      : [];
+    const isCoopSquad = multiplayer.isActive() && connectedIds.length > 1;
+    const isBossOrElite = !!(enemy.isBoss || enemy.isSubBoss || enemy.reward >= 35);
+
+    if (isCoopSquad) {
+      const payouts = distributeKillReward(
+        totalGold,
+        enemy.damageByPlayer,
+        killerId,
+        connectedIds,
+        isBossOrElite
+      );
+      for (const [pid, amt] of Object.entries(payouts)) {
+        if (amt > 0) this.addActorBudget(pid, amt);
+      }
+      if (payouts.assist) {
+        for (const [pid, amt] of Object.entries(payouts.assist)) {
+          if (amt > 0) this.addActorBudget(pid, amt);
+        }
+      }
+    } else {
+      this.addActorBudget(killerId, totalGold);
+    }
+
     if (enemy.wbReward > 0) {
       this.sessionWB += enemy.wbReward;
       saveManager.addWarBonds(enemy.wbReward);
     }
     if (sourceTower) sourceTower.kills += 1;
 
-    const rewardLabel = enemy.wbReward > 0 ? `+$${enemy.reward} | +${enemy.wbReward} WB$` : `+$${enemy.reward}`;
+    const rewardLabel = enemy.wbReward > 0 ? `+$${totalGold} | +${enemy.wbReward} WB$` : `+$${totalGold}`;
     this.spawnFloatingText(enemy.wx, enemy.wy + 1.8, enemy.wz, rewardLabel, enemy.wbReward > 0 ? '#facc15' : '#4ade80');
 
     if (enemy.isBoss) {
@@ -3635,11 +6568,31 @@ export class Battlefield3D {
       this.hitStopTimer = 0.045;
       this.triggerFlashLight(enemy.wx, 3.0, enemy.wz, 0xff7b22, 8.0, 0.18);
       this.pushRadio(`ALVO PRIORITÁRIO DESTRUÍDO! ${enemy.type.toUpperCase()} abatido (+$${enemy.reward} / +${enemy.wbReward} WB$)!`, 'good');
+      if (multiplayer.isHost()) {
+        multiplayer.queueCombatEvent({
+          kind: 'EXPLODE',
+          wx: Number(enemy.wx.toFixed(2)),
+          wy: 1.2,
+          wz: Number(enemy.wz.toFixed(2)),
+          scale: 2.35,
+          color: 0xef4444
+        });
+      }
     } else if (enemy.armorClass === 'heavy' || enemy.domain === 'air') {
       this.effects.spawnExplosion(enemy.wx, Math.max(0.6, enemy.wy), enemy.wz, 1.15, 0xf97316, true);
       if (enemy.domain === 'ground') this.effects.spawnCrater(enemy.wx, enemy.wz, 0.9);
       audio.playExplosion(1.0);
       this.addTrauma(0.16);
+      if (multiplayer.isHost()) {
+        multiplayer.queueCombatEvent({
+          kind: 'EXPLODE',
+          wx: Number(enemy.wx.toFixed(2)),
+          wy: Number(Math.max(0.6, enemy.wy).toFixed(2)),
+          wz: Number(enemy.wz.toFixed(2)),
+          scale: 1.15,
+          color: 0xf97316
+        });
+      }
     } else {
       this.effects.spawnExplosion(enemy.wx, 0.5, enemy.wz, 0.55, 0xf97316, true);
     }
@@ -3718,13 +6671,25 @@ export class Battlefield3D {
             mesh.visible = true;
 
             this.effects.spawnExplosion(iwx, 0.35, iwz, 0.65, 0xf97316, true);
+            if (multiplayer.isHost()) {
+              multiplayer.queueCombatEvent({
+                kind: 'EXPLODE',
+                wx: Number(iwx.toFixed(2)),
+                wy: 0.35,
+                wz: Number(iwz.toFixed(2)),
+                scale: 0.65,
+                color: 0xf97316,
+                damageType: 'silent'
+              });
+            }
 
             this.enemyPool.forEachActive((obj) => {
               const e = obj as EnemyEntity;
               if (Math.hypot(e.x - ix, e.y - iy) <= 58) {
                 this.applyDamageToEnemy(e, 105, 'apds', null, {
                   armorIgnore: 0.72,
-                  allowApsIntercept: false
+                  allowApsIntercept: false,
+                  actorId: f.actorId
                 });
               }
             });
@@ -3744,13 +6709,26 @@ export class Battlefield3D {
 
             this.effects.spawnExplosion(iwx, 0.4, iwz, 1.35, 0xf97316, true);
             this.effects.spawnCrater(iwx, iwz, 1.1);
-            this.spawnFireZone(ix, iy, 82, 95, 4.5);
+            this.spawnFireZone(ix, iy, 82, 95, 4.5, 'fire', 0, f.actorId);
             audio.playExplosion(1.1);
+            if (multiplayer.isHost()) {
+              multiplayer.queueCombatEvent({
+                kind: 'EXPLODE',
+                wx: Number(iwx.toFixed(2)),
+                wy: 0.4,
+                wz: Number(iwz.toFixed(2)),
+                scale: 1.35,
+                color: 0xf97316
+              });
+            }
 
             this.enemyPool.forEachActive((obj) => {
               const e = obj as EnemyEntity;
               if (Math.hypot(e.x - ix, e.y - iy) <= 110) {
-                this.applyDamageToEnemy(e, 520, 'thermobaric', null, { allowApsIntercept: false });
+                this.applyDamageToEnemy(e, 520, 'thermobaric', null, {
+                  allowApsIntercept: false,
+                  actorId: f.actorId
+                });
               }
             });
           }
@@ -3850,6 +6828,34 @@ export class Battlefield3D {
       t.el.classList.remove('hidden');
       t.el.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -50%)`;
     });
+
+    for (const [, cur] of this.allyCursors) {
+      if (!cur.group.visible) {
+        cur.labelEl.classList.add('hidden');
+        continue;
+      }
+      proj.set(cur.wx, 1.35, cur.wz).project(this.camera);
+      if (proj.z > 1) {
+        cur.labelEl.classList.add('hidden');
+        continue;
+      }
+      const sx = (proj.x * 0.5 + 0.5) * w;
+      const sy = (-proj.y * 0.5 + 0.5) * h;
+      cur.labelEl.classList.remove('hidden');
+      cur.labelEl.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -100%)`;
+    }
+
+    for (const p of this.activePings) {
+      proj.set(p.wx, 5.2, p.wz).project(this.camera);
+      if (proj.z > 1) {
+        p.labelEl.classList.add('hidden');
+        continue;
+      }
+      const sx = (proj.x * 0.5 + 0.5) * w;
+      const sy = (-proj.y * 0.5 + 0.5) * h;
+      p.labelEl.classList.remove('hidden');
+      p.labelEl.style.transform = `translate3d(${sx}px, ${sy}px, 0) translate(-50%, -100%)`;
+    }
   }
 
   private clearGroup(group: THREE.Group) {
@@ -3892,7 +6898,7 @@ export class Battlefield3D {
     this.clearGroup(this.selectedRingGroup);
     if (!this.selectedTower) return;
     const t = this.selectedTower;
-    const spec = t.def.levels[t.level - 1];
+    const spec = this.getEffectiveSpec(t);
 
     const box = new THREE.Mesh(
       new THREE.RingGeometry(1.75, 1.98, 4),
@@ -3905,7 +6911,7 @@ export class Battlefield3D {
 
     if (!t.def.isBarrier && spec.range > 0) {
       const rW = spec.range * WORLD_SCALE;
-      const ring = this.createCircleLoop(72, 0x38bdf8, 0.85);
+      const ring = this.createCircleLoop(72, t.specialization === 'A' ? 0x38bdf8 : t.specialization === 'B' ? 0xf59e0b : 0x38bdf8, 0.85);
       ring.scale.setScalar(rW);
       ring.position.set(t.wx, 0.11, t.wz);
       this.selectedRingGroup.add(ring);
@@ -3933,7 +6939,8 @@ export class Battlefield3D {
       const { col, row } = this.hoverTile;
       if (this.pathfinder.inBounds(col, row)) {
         const def = (TOWER_DEFINITIONS as any)[this.activeTool.towerId];
-        const spec = def.levels[0];
+        const spec = getTowerLevelSpec(def, 1);
+        const fogMult = this.pathfinder.hasTerrainFeature(col, row, 'fog') ? 0.78 : 1;
         const effectiveCost = this.getEffectiveTowerCost(this.activeTool.towerId);
         const { x: wx, z: wz } = cellToWorldCenter(col, row);
         const valid = Boolean(this.lastCanPlace?.ok && this.budget >= effectiveCost);
@@ -3949,7 +6956,7 @@ export class Battlefield3D {
         }
 
         if (spec.range > 0) {
-          const rW = spec.range * WORLD_SCALE;
+          const rW = spec.range * fogMult * WORLD_SCALE;
           this.ghostRangeRing.visible = true;
           this.ghostRangeRing.scale.setScalar(rW);
           (this.ghostRangeRing.material as THREE.LineBasicMaterial).color.setHex(valid ? 0x22c55e : 0xef4444);
@@ -4041,42 +7048,91 @@ export class Battlefield3D {
   private serializeTower(t: TowerEntity | null) {
     if (!t) return null;
     const spec = this.getEffectiveSpec(t);
-    const nextSpec = t.def.levels[t.level] || null;
+    const upgradeOptions = getTowerUpgradeOptions(t.def, t.level, t.specialization);
+    const maxLevel = (t.def.levels?.length || 1) + (t.def.specializations ? 2 : 0);
     return {
       id: t.id,
       defId: t.defId,
+      ownerId: t.ownerId,
+      ownerName: t.ownerName,
+      ownerColor: t.ownerColor,
+      canModify: multiplayer.canModifyTower(t.ownerId, multiplayer.localPeerId),
+      canRepair: multiplayer.canRepairTower(multiplayer.localPeerId),
       name: spec.name,
       shortName: t.def.shortName,
       role: t.def.role,
+      category: t.def.category || 'combat',
       level: t.level,
-      maxLevel: t.def.levels.length,
+      maxLevel,
+      specialization: t.specialization,
+      specPros: spec.pros || null,
+      specCons: spec.cons || null,
       hp: Math.ceil(t.hp),
       maxHp: t.maxHp,
+      shield: Math.round(t.shield),
+      maxShield: Math.round(t.maxShield),
       repairCost: this.getRepairCost(t),
       empDisabled: t.empDisabledTimer > 0,
+      fogDebuff: t.fogDebuff,
+      burning: t.burnTimer > 0,
+      corroded: t.corrosionTimer > 0,
+      chilled: t.chillTimer > 0,
       isBarrier: !!t.def.isBarrier,
       isSupportAura: !!t.def.isSupportAura,
       domain: t.def.domain,
+      damageType: spec.damageType || 'physical',
       range: spec.range,
       minRange: spec.minRange || 0,
       fireRate: spec.fireRate,
       damage: spec.damage,
       notes: spec.notes,
       priority: t.priority,
-      totalDamage: t.totalDamage,
+      totalDamage: Math.round(t.totalDamage),
       kills: t.kills,
       sellRefund: Math.floor(t.totalInvested * 0.75 * Math.max(0.4, t.hp / t.maxHp)),
-      nextUpgrade: nextSpec
-        ? {
-            name: nextSpec.name,
-            cost: nextSpec.upgradeCost,
-            notes: nextSpec.notes
-          }
-        : null
+      upgradeOptions,
+      nextUpgrade:
+        upgradeOptions?.kind === 'common'
+          ? {
+              name: upgradeOptions.name,
+              cost: upgradeOptions.cost,
+              notes: upgradeOptions.notes
+            }
+          : null
     };
   }
 
-  private emitFullHudSync() {
+  private serializeEnemy(e: EnemyEntity | null) {
+    if (!e || !e._pooledActive) return null;
+    const def = (ENEMY_DEFINITIONS as any)[e.type];
+    return {
+      id: e.id,
+      isPreview: false,
+      type: e.type,
+      name: def?.name || e.type,
+      category: def?.category || e.domain,
+      domain: e.domain,
+      armorClass: e.armorClass,
+      hp: Math.max(0, Math.ceil(e.hp)),
+      maxHp: e.maxHp,
+      shield: Math.max(0, Math.round(e.shield)),
+      maxShield: e.maxShield,
+      speed: Math.round(e.speed),
+      reward: e.reward,
+      fobDamage: e.fobDamage,
+      isStealth: e.isStealth,
+      stealthRevealed: e.stealthRevealed,
+      isBurrowed: e.isBurrowed,
+      isBoss: e.isBoss,
+      weaponName: def?.weaponName || null,
+      towerAttack: def?.towerAttack || null,
+      resistances: e.resistances || def?.resistances || {},
+      aiBehavior: def?.aiBehavior || null,
+      roleSummary: def?.roleSummary || ''
+    };
+  }
+
+  private emitFullHudSync(waveVotesOverride?: string[], requiredVotesOverride?: number) {
     const nextWaveIdx = this.currentWave;
     const nextWaveDef = this.stageConfig.waves[nextWaveIdx] || null;
     const canCallEarly =
@@ -4084,12 +7140,43 @@ export class Battlefield3D {
       this.currentWave < this.totalWaves &&
       (!this.waveActive || this.spawnQueue.length === 0);
 
+    const damaged = this.towers.filter(
+      (t) => t.hp < t.maxHp || t.burnTimer > 0 || t.corrosionTimer > 0 || t.chillTimer > 0
+    );
+    const repairAllCost = damaged.reduce((acc, t) => acc + this.getRepairCost(t), 0);
+
+    let activeBoss: any = null;
+    this.enemyPool.forEachActive((obj) => {
+      const e = obj as EnemyEntity;
+      if (e.isBoss && (!activeBoss || e.isStageBoss || e.isMegaBoss)) {
+        const def = (ENEMY_DEFINITIONS as any)[e.type];
+        activeBoss = {
+          name: def?.name || e.type,
+          shortName: def?.shortName || e.type,
+          hp: Math.max(0, Math.ceil(e.hp)),
+          maxHp: e.maxHp,
+          shield: Math.max(0, Math.round(e.shield)),
+          maxShield: e.maxShield,
+          weaponName: def?.weaponName || null
+        };
+      }
+    });
+
+    const localId = multiplayer.isActive() ? multiplayer.localPeerId : 'local';
+    const localTowerCount = this.towers.filter((t) => t.ownerId === localId || !t.ownerId).length;
+    const maxTowers = multiplayer.isActive()
+      ? getMaxTowersPerPlayer(multiplayer.getConnectedPlayerCount())
+      : 30;
+    const lobby = multiplayer.getLobbyState();
+    const localBudget = this.getActorBudget(multiplayer.localPeerId);
+
     bus.emit('hud:state', {
-      budget: this.budget,
+      budget: localBudget,
       warBonds: saveManager.getWarBonds(),
       worldId: this.currentWorldId,
       stageId: this.currentStageId,
       stageTitle: this.stageConfig.title,
+      stageDifficulty: this.stageConfig.difficulty || null,
       fobHp: this.fobHp,
       fobMaxHp: this.fobMaxHp,
       currentWave: this.currentWave,
@@ -4103,6 +7190,20 @@ export class Battlefield3D {
       activeEnemies: this.enemyPool.activeCount,
       totalKills: this.totalKills,
       hasGlobalAesa: this.hasGlobalAesa,
+      damagedTowerCount: damaged.length,
+      repairAllCost,
+      ruinCount: this.destroyedRuins.length,
+      towerCount: localTowerCount,
+      maxTowers,
+      coopActive: multiplayer.isActive(),
+      coopIsHost: multiplayer.isHost(),
+      coopIsClient: multiplayer.isClient(),
+      coopRoomCode: multiplayer.getRoomCode(),
+      coopPlayers: lobby.players,
+      waveVotes: waveVotesOverride ?? lobby.waveVotes,
+      requiredVotes: requiredVotesOverride ?? lobby.requiredVotes,
+      waveVoteTimer: Math.ceil(this.waveVoteTimer || lobby.waveVoteTimer || 0),
+      activeBoss,
       airSupport: {
         a10: { ...this.airSupport.a10 },
         hellfire: { ...this.airSupport.hellfire },
@@ -4131,7 +7232,7 @@ export class Battlefield3D {
   }
 
   destroy() {
-    if (!this.gameOver && (this.towers.length > 0 || this.currentWave > 0)) {
+    if (!multiplayer.isActive() && !this.gameOver && (this.towers.length > 0 || this.currentWave > 0)) {
       this.saveCurrentMissionSnapshot(true);
     }
     cancelAnimationFrame(this.rafId);
@@ -4142,6 +7243,8 @@ export class Battlefield3D {
     window.removeEventListener('pagehide', this.onBeforeUnload);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
     for (const unsub of this.unsubs) unsub();
+    for (const unsub of this.coopUnsubs) unsub();
+    this.clearCoopVisuals();
     if (this.diorama) this.diorama.dispose();
     this.controls.dispose();
     this.renderer.dispose();

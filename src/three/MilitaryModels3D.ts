@@ -592,44 +592,102 @@ export interface EnemyRig3D {
   legs?: THREE.Object3D[];
   ewRing?: THREE.Mesh;
   apsShield?: THREE.Mesh;
+  energyShieldMesh?: THREE.Mesh;
+  prepRing?: THREE.Mesh;
   eraMeshes?: THREE.Object3D[];
   stealthMaterials?: THREE.MeshStandardMaterial[];
   hitMeshes: THREE.Mesh[];
 }
 
-export function createTowerModel3D(defId: string, level = 1): TowerRig3D {
+export function createTowerModel3D(
+  defId: string,
+  level = 1,
+  specialization: 'A' | 'B' | null = null
+): TowerRig3D {
   const root = new THREE.Group();
   const rig: TowerRig3D = { root };
   const mats = getMats();
+  const vLevel = level <= 1 ? 1 : level <= 3 ? 2 : 3;
 
   if (defId === 'hesco') {
-    buildHescoModel(root, mats, level);
+    buildHescoModel(root, mats, vLevel);
     enableShadows(root, true, true);
     return rig;
   }
 
   if (defId === 'm2_bunker') {
-    buildM2Bunker(root, rig, mats, level);
+    buildM2Bunker(root, rig, mats, vLevel);
   } else if (defId === 'bushmaster') {
-    buildBushmaster(root, rig, mats, level);
+    buildBushmaster(root, rig, mats, vLevel);
   } else if (defId === 'javelin') {
-    buildJavelin(root, rig, mats, level);
+    buildJavelin(root, rig, mats, vLevel);
   } else if (defId === 'phalanx') {
-    buildPhalanx(root, rig, mats, level);
+    buildPhalanx(root, rig, mats, vLevel);
   } else if (defId === 'howitzer') {
-    buildHowitzer(root, rig, mats, level);
+    buildHowitzer(root, rig, mats, vLevel);
   } else if (defId === 'patriot') {
-    buildPatriot(root, rig, mats, level);
+    buildPatriot(root, rig, mats, vLevel);
   } else if (defId === 'ew_crew') {
-    buildEwCrew(root, rig, mats, level);
+    buildEwCrew(root, rig, mats, vLevel);
   } else if (defId === 'abrams_pit') {
-    buildAbramsPit(root, rig, mats, level);
+    buildAbramsPit(root, rig, mats, vLevel);
   } else if (defId === 'iron_dome') {
-    buildIronDome(root, rig, mats, level);
+    buildIronDome(root, rig, mats, vLevel);
   } else if (defId === 'helios_laser') {
-    buildHeliosLaser(root, rig, mats, level);
+    buildHeliosLaser(root, rig, mats, vLevel);
   } else if (defId === 'tos1_mlrs') {
-    buildTos1Mlrs(root, rig, mats, level);
+    buildTos1Mlrs(root, rig, mats, vLevel);
+  } else if (defId === 'ballista') {
+    buildBallista(root, rig, mats, vLevel);
+  } else if (defId === 'sniper_tower') {
+    buildSniperTower(root, rig, mats, vLevel);
+  } else if (defId === 'cryo_tower') {
+    buildCryoTower(root, rig, mats, vLevel);
+  } else if (defId === 'tesla_tower') {
+    buildTeslaTower(root, rig, mats, vLevel);
+  } else if (defId === 'toxic_tower') {
+    buildToxicTower(root, rig, mats, vLevel);
+  } else if (defId === 'flamethrower') {
+    buildFlamethrower(root, rig, mats, vLevel);
+  } else if (defId === 'railgun') {
+    buildRailgun(root, rig, mats, vLevel);
+  } else if (defId === 'harpoon_tower') {
+    buildHarpoonTower(root, rig, mats, vLevel);
+  } else if (defId === 'minefield') {
+    buildMinefieldLayer(root, rig, mats, vLevel);
+  } else if (defId === 'eng_workshop') {
+    buildEngWorkshop(root, rig, mats, vLevel);
+  } else if (defId === 'energy_extractor') {
+    buildEnergyExtractor(root, rig, mats, vLevel);
+  }
+
+  // Visual tier / specialization emblem ring on base
+  if (level >= 4 || specialization) {
+    const ringMat =
+      specialization === 'A'
+        ? mats.radarCyan
+        : specialization === 'B'
+          ? mats.amberGlow
+          : mats.opticGreen;
+    const specRing = new THREE.Mesh(
+      getGeo('tower_spec_ring', () => new THREE.TorusGeometry(1.78, 0.055, 8, 28)),
+      ringMat
+    );
+    specRing.rotation.x = Math.PI / 2;
+    specRing.position.y = 0.24;
+    specRing.userData.noShadow = true;
+    root.add(specRing);
+
+    if (level >= 6 && specialization) {
+      const crownRing = new THREE.Mesh(
+        getGeo('tower_master_ring', () => new THREE.TorusGeometry(1.92, 0.045, 8, 28)),
+        specialization === 'A' ? mats.sapphireOptic : mats.afterburner
+      );
+      crownRing.rotation.x = Math.PI / 2;
+      crownRing.position.y = 0.34;
+      crownRing.userData.noShadow = true;
+      root.add(crownRing);
+    }
   }
 
   enableShadows(root, true, true);
@@ -1859,6 +1917,346 @@ function buildTos1Mlrs(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials,
 }
 
 // ============================================================================
+// 11 NEW EXPANSION TOWER MODELS
+// ============================================================================
+
+function buildBallista(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addCyl(root, 1.48, 1.62, 0.2, 8, mats.concreteDark, 0, 0.1, 0);
+  addSandbagRing(root, 1.38, 10, mats.sandbag, 0.24, 1);
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 0.32, 0);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addCyl(turretPivot, 0.42, 0.56, 0.62, 8, mats.oliveDark, 0, 0.31, 0);
+  const barrelPivot = new THREE.Group();
+  barrelPivot.position.set(0, 0.72, 0.05);
+  turretPivot.add(barrelPivot);
+  rig.barrelPivot = barrelPivot;
+
+  // Heavy mechanical rail & torsion bow limbs
+  addBox(barrelPivot, 0.28, 0.18, 1.85, mats.darkSteel, 0, 0, 0.25);
+  addBox(barrelPivot, 1.55 + level * 0.25, 0.1, 0.18, mats.steel, 0, 0.04, 0.85);
+  addBox(barrelPivot, 0.45, 0.12, 0.22, mats.brass, -0.78, 0.04, 0.58, 0, 0.48, 0);
+  addBox(barrelPivot, 0.45, 0.12, 0.22, mats.brass, 0.78, 0.04, 0.58, 0, -0.48, 0);
+  // Loaded steel bolt
+  addCyl(barrelPivot, 0.045, 0.045, 1.45, 8, mats.amberGlow, 0, 0.12, 0.52, Math.PI / 2, 0, 0);
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0.12, 1.32);
+  barrelPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0.12, 1.38, 0.7);
+}
+
+function buildSniperTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addBox(root, 2.75, 0.22, 2.75, mats.concreteDark, 0, 0.11, 0);
+  // Elevated observation scaffold & sniper nest
+  for (const [lx, lz] of [[-0.95, -0.95], [0.95, -0.95], [-0.95, 0.95], [0.95, 0.95]]) {
+    addBox(root, 0.16, 1.55, 0.16, mats.darkSteel, lx, 0.92, lz);
+  }
+  addBox(root, 2.25, 0.18, 2.25, mats.oliveDark, 0, 1.72, 0);
+  addBox(root, 2.32, 0.28, 0.12, mats.camoNet, 0, 1.92, 1.08);
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 1.84, 0);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addCyl(turretPivot, 0.48, 0.58, 0.34, 8, mats.olive, 0, 0.17, 0);
+  const barrelPivot = new THREE.Group();
+  barrelPivot.position.set(0, 0.44, 0.15);
+  turretPivot.add(barrelPivot);
+  rig.barrelPivot = barrelPivot;
+
+  addBox(barrelPivot, 0.32, 0.28, 0.95, mats.gunmetal, 0, 0, 0);
+  addCyl(barrelPivot, 0.08, 0.08, 0.42, 10, mats.sapphireOptic, 0.18, 0.22, 0.15, Math.PI / 2, 0, 0);
+  addCyl(barrelPivot, 0.055, 0.065, 2.3 + level * 0.25, 10, mats.gunmetal, 0, 0, 1.55, Math.PI / 2, 0, 0);
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0, 2.75);
+  barrelPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 2.82, 0.95);
+}
+
+function buildCryoTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addCyl(root, 1.52, 1.66, 0.22, 10, mats.concreteDark, 0, 0.11, 0);
+  addCyl(root, 1.24, 1.32, 0.16, 10, mats.diamondPlate, 0, 0.28, 0);
+
+  // Cryogenic nitrogen storage tanks
+  for (const sx of [-0.88, 0.88]) {
+    addCyl(root, 0.3, 0.3, 1.15, 12, mats.navalWhite, sx, 0.92, -0.35);
+    addCyl(root, 0.32, 0.32, 0.14, 12, mats.radarCyan, sx, 1.32, -0.35);
+  }
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 0.42, 0.1);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addCyl(turretPivot, 0.62, 0.72, 0.65, 10, mats.navalGray, 0, 0.34, 0);
+  const barrelPivot = new THREE.Group();
+  barrelPivot.position.set(0, 0.72, 0.28);
+  turretPivot.add(barrelPivot);
+  rig.barrelPivot = barrelPivot;
+
+  addBox(barrelPivot, 0.66, 0.46, 0.85, mats.navalWhite, 0, 0, 0.15);
+  addCyl(barrelPivot, 0.22, 0.14, 0.95, 12, mats.radarCyan, 0, 0, 0.95, Math.PI / 2, 0, 0);
+
+  if (level >= 2) {
+    rig.ewRings = [];
+    const ring = new THREE.Mesh(getGeo('cryo_aura_ring', () => new THREE.TorusGeometry(1.15, 0.04, 8, 24)), mats.ewCyan);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 1.45;
+    ring.userData.noShadow = true;
+    root.add(ring);
+    rig.ewRings.push(ring);
+  }
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0, 1.45);
+  barrelPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 1.52, 1.0, true);
+}
+
+function buildTeslaTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addCyl(root, 1.56, 1.7, 0.24, 8, mats.concreteDark, 0, 0.12, 0);
+  addCyl(root, 1.24, 1.34, 0.2, 8, mats.darkSteel, 0, 0.34, 0);
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 0.45, 0);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addCyl(turretPivot, 0.34, 0.48, 1.75, 12, mats.copperAesa, 0, 0.9, 0);
+  const ringCount = 3 + level;
+  for (let i = 0; i < ringCount; i++) {
+    const tor = new THREE.Mesh(
+      getGeo(`tesla_coil_${i}`, () => new THREE.TorusGeometry(0.62 - i * 0.06, 0.065, 8, 20)),
+      mats.steel
+    );
+    tor.rotation.x = Math.PI / 2;
+    tor.position.y = 0.72 + i * 0.26;
+    turretPivot.add(tor);
+  }
+
+  const orb = new THREE.Mesh(getGeo('tesla_orb', () => new THREE.SphereGeometry(0.42, 14, 12)), mats.radarCyan);
+  orb.position.set(0, 1.95 + level * 0.15, 0);
+  turretPivot.add(orb);
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 1.95 + level * 0.15, 0);
+  turretPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(turretPivot, mats, 0, 1.95 + level * 0.15, 0, 1.2, true);
+}
+
+function buildToxicTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addCyl(root, 1.54, 1.66, 0.22, 8, mats.concreteDark, 0, 0.11, 0);
+  addCyl(root, 1.24, 1.34, 0.18, 8, mats.oliveDark, 0, 0.3, 0);
+
+  // Glowing green chemical vats
+  for (const sx of [-0.78, 0.78]) {
+    addCyl(root, 0.28, 0.28, 1.05, 12, mats.opticGreen, sx, 0.85, -0.25);
+    addCyl(root, 0.32, 0.32, 0.14, 12, mats.darkSteel, sx, 1.35, -0.25);
+  }
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 0.42, 0.08);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addCyl(turretPivot, 0.62, 0.72, 0.56, 10, mats.olive, 0, 0.28, 0);
+  const barrelPivot = new THREE.Group();
+  barrelPivot.position.set(0, 0.64, 0.25);
+  turretPivot.add(barrelPivot);
+  rig.barrelPivot = barrelPivot;
+
+  addBox(barrelPivot, 0.64, 0.44, 0.82, mats.oliveDark, 0, 0, 0.15);
+  for (const bx of level >= 2 ? [-0.18, 0.18] : [0]) {
+    addCyl(barrelPivot, 0.12, 0.15, 1.05, 10, mats.gunmetal, bx, 0, 0.85, Math.PI / 2, 0, 0);
+    addCyl(barrelPivot, 0.13, 0.13, 0.1, 10, mats.opticGreen, bx, 0, 1.38, Math.PI / 2, 0, 0);
+  }
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0, 1.45);
+  barrelPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 1.5, 0.9);
+}
+
+function buildFlamethrower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addCyl(root, 1.54, 1.66, 0.22, 8, mats.concreteDark, 0, 0.11, 0);
+  addSandbagRing(root, 1.45, 12, mats.sandbag, 0.22, 1);
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 0.35, 0);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addBox(turretPivot, 1.32, 0.65, 1.38, mats.desertArmor, 0, 0.42, 0);
+  // Pressurized napalm fuel canisters on rear
+  for (const fx of [-0.36, 0.36]) {
+    addCyl(turretPivot, 0.24, 0.24, 0.88, 12, mats.shtoraRed, fx, 0.72, -0.78, Math.PI / 2, 0, 0);
+  }
+
+  const barrelPivot = new THREE.Group();
+  barrelPivot.position.set(0, 0.66, 0.55);
+  turretPivot.add(barrelPivot);
+  rig.barrelPivot = barrelPivot;
+
+  const nozzles = level >= 2 ? [-0.22, 0.22] : [0];
+  for (const nx of nozzles) {
+    addCyl(barrelPivot, 0.11, 0.14, 1.25, 10, mats.gunmetal, nx, 0, 0.58, Math.PI / 2, 0, 0);
+    addCyl(barrelPivot, 0.14, 0.08, 0.16, 10, mats.afterburner, nx, 0, 1.24, Math.PI / 2, 0, 0);
+  }
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0, 1.35);
+  barrelPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 1.45, 1.35);
+}
+
+function buildRailgun(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addBox(root, 3.15, 0.22, 3.15, mats.concreteDark, 0, 0.11, 0);
+  addBox(root, 2.65, 0.16, 2.65, mats.diamondPlate, 0, 0.28, 0);
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 0.38, 0);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addBox(turretPivot, 1.68, 0.68, 1.95, mats.navalGray, 0, 0.42, -0.15);
+  // Dual capacitor glowing rails
+  for (const sx of [-0.62, 0.62]) {
+    addBox(turretPivot, 0.26, 0.52, 1.35, mats.radarCyan, sx, 0.52, -0.2);
+  }
+
+  const barrelPivot = new THREE.Group();
+  barrelPivot.position.set(0, 0.66, 0.65);
+  turretPivot.add(barrelPivot);
+  rig.barrelPivot = barrelPivot;
+
+  // Twin parallel magnetic accelerator rails with glowing core gap
+  const railLen = 2.25 + level * 0.22;
+  addBox(barrelPivot, 0.12, 0.28, railLen, mats.darkSteel, -0.16, 0, railLen * 0.42);
+  addBox(barrelPivot, 0.12, 0.28, railLen, mats.darkSteel, 0.16, 0, railLen * 0.42);
+  addBox(barrelPivot, 0.08, 0.14, railLen * 0.9, mats.sapphireOptic, 0, 0, railLen * 0.42);
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0, railLen * 0.95);
+  barrelPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, railLen, 1.2, true);
+}
+
+function buildHarpoonTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addCyl(root, 1.5, 1.62, 0.22, 8, mats.concreteDark, 0, 0.11, 0);
+  addCyl(root, 1.15, 1.24, 0.18, 8, mats.diamondPlate, 0, 0.3, 0);
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 0.42, 0);
+  root.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addCyl(turretPivot, 0.52, 0.64, 0.55, 8, mats.navalGray, 0, 0.28, 0);
+  // Magnetic winch drum
+  addCyl(turretPivot, 0.28, 0.28, 0.72, 12, mats.brass, 0, 0.72, -0.35, 0, 0, Math.PI / 2);
+
+  const barrelPivot = new THREE.Group();
+  barrelPivot.position.set(0, 0.78, 0.15);
+  turretPivot.add(barrelPivot);
+  rig.barrelPivot = barrelPivot;
+
+  const count = level >= 2 ? 2 : 1;
+  for (let i = 0; i < count; i++) {
+    const ox = count === 2 ? (i === 0 ? -0.24 : 0.24) : 0;
+    addBox(barrelPivot, 0.18, 0.18, 1.45, mats.darkSteel, ox, 0, 0.42);
+    addCyl(barrelPivot, 0.03, 0.14, 0.42, 6, mats.radarCyan, ox, 0, 1.32, Math.PI / 2, 0, 0);
+  }
+
+  const muzzlePoint = new THREE.Object3D();
+  muzzlePoint.position.set(0, 0, 1.48);
+  barrelPivot.add(muzzlePoint);
+  rig.muzzlePoint = muzzlePoint;
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 1.55, 0.85, true);
+}
+
+function buildMinefieldLayer(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addBox(root, 2.85, 0.18, 2.85, mats.concreteDark, 0, 0.09, 0);
+  addBox(root, 2.35, 0.14, 2.35, mats.diamondPlate, 0, 0.24, 0);
+
+  // Automated mine dispenser depot with stacked landmines & beacon
+  addBox(root, 1.45, 0.72, 1.45, mats.oliveDark, 0, 0.64, 0);
+  addBox(root, 1.15, 0.14, 1.15, mats.amberGlow, 0, 1.04, 0);
+  for (const [mx, mz] of [[-0.88, -0.88], [0.88, -0.88], [-0.88, 0.88], [0.88, 0.88]]) {
+    addCyl(root, 0.24, 0.28, 0.16, 10, mats.gunmetal, mx, 0.38, mz);
+    addCyl(root, 0.08, 0.08, 0.08, 8, level >= 3 ? mats.radarCyan : mats.shtoraRed, mx, 0.48, mz);
+  }
+  const mast = new THREE.Group();
+  mast.position.set(0, 1.12, 0);
+  addCyl(mast, 0.06, 0.08, 0.65, 8, mats.steel, 0, 0.32, 0);
+  addBox(mast, 0.56, 0.14, 0.1, mats.amberGlow, 0, 0.68, 0);
+  root.add(mast);
+  rig.radarPivots = [mast];
+}
+
+function buildEngWorkshop(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addBox(root, 3.25, 0.2, 3.25, mats.concreteDark, 0, 0.1, 0);
+  addBox(root, 2.8, 0.12, 2.8, mats.diamondPlate, 0, 0.24, 0);
+
+  // Armored repair bay hangar + overhead crane gantry
+  addBox(root, 2.25, 0.95, 1.85, mats.desertArmor, 0, 0.76, -0.15);
+  addBox(root, 1.65, 0.18, 0.12, mats.sapphireOptic, 0, 1.02, 0.82);
+  addBox(root, 0.24, 1.4, 0.24, mats.steel, -1.15, 0.98, 0.55);
+  addBox(root, 0.24, 1.4, 0.24, mats.steel, 1.15, 0.98, 0.55);
+  addBox(root, 2.65, 0.22, 0.26, mats.amberGlow, 0, 1.72, 0.55);
+
+  const crane = new THREE.Group();
+  crane.position.set(0, 1.32, -0.15);
+  addBox(crane, 1.9, 0.14, 0.16, mats.radarCyan, 0, 0.48, 0);
+  root.add(crane);
+  rig.radarPivots = [crane];
+
+  if (level >= 1) {
+    rig.ewRings = [];
+    const hRing = new THREE.Mesh(
+      getGeo('eng_heal_ring', () => new THREE.TorusGeometry(1.35, 0.04, 8, 28)),
+      mats.ewCyan
+    );
+    hRing.rotation.x = Math.PI / 2;
+    hRing.position.y = 1.6;
+    hRing.userData.noShadow = true;
+    root.add(hRing);
+    rig.ewRings.push(hRing);
+  }
+}
+
+function buildEnergyExtractor(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+  addCyl(root, 1.56, 1.72, 0.22, 10, mats.concreteDark, 0, 0.11, 0);
+  addCyl(root, 1.32, 1.4, 0.16, 10, mats.diamondPlate, 0, 0.28, 0);
+
+  // Geothermal / fusion energy turbine core + spinning cooling rotor
+  addCyl(root, 0.78, 0.92, 0.85, 10, mats.oliveDark, 0, 0.72, 0);
+  addCyl(root, 0.42, 0.42, 1.35, 14, mats.amberGlow, 0, 1.25, 0);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    addBox(root, 0.26, 1.05, 0.22, mats.copperAesa, Math.sin(a) * 0.82, 0.92, Math.cos(a) * 0.82, 0, a, 0);
+  }
+
+  const turbine = new THREE.Group();
+  turbine.position.set(0, 1.98, 0);
+  addBox(turbine, 1.9 + level * 0.15, 0.1, 0.24, mats.radarCyan, 0, 0, 0);
+  addBox(turbine, 0.24, 0.1, 1.9 + level * 0.15, mats.radarCyan, 0, 0, 0);
+  root.add(turbine);
+  rig.radarPivots = [turbine];
+}
+
+// ============================================================================
 // OPFOR ENEMY MODELS (All 8 base + 3 Sub-Bosses + 4 Stage Bosses + 3 Mega Bosses)
 // ============================================================================
 
@@ -1908,6 +2306,46 @@ export function createEnemyModel3D(type: string): EnemyRig3D {
     buildMegaBossObject279(hullGroup, rig, mats);
   } else if (type === 'megaboss_kirov_airship') {
     buildMegaBossKirov(hullGroup, rig, mats);
+  } else if (type === 'recruta') {
+    buildInfantrySquad(hullGroup, rig, mats);
+  } else if (type === 'corredor') {
+    buildCorredor(hullGroup, rig, mats);
+  } else if (type === 'batedor_plasma') {
+    buildBatedorPlasma(hullGroup, rig, mats);
+  } else if (type === 'escudeiro') {
+    buildEscudeiro(hullGroup, rig, mats);
+  } else if (type === 'brutamontes') {
+    buildBrutamontes(hullGroup, rig, mats);
+  } else if (type === 'artilheiro') {
+    buildArtilheiro(hullGroup, rig, mats);
+  } else if (type === 'demolidor') {
+    buildDemolidor(hullGroup, rig, mats);
+  } else if (type === 'drone_recon') {
+    buildDroneRecon(hullGroup, rig, mats);
+  } else if (type === 'drone_bombardeiro') {
+    buildDroneBombardeiro(hullGroup, rig, mats);
+  } else if (type === 'cacador_furtivo') {
+    buildCacadorFurtivo(hullGroup, rig, mats);
+  } else if (type === 'medico_combate') {
+    buildMedicoCombate(hullGroup, rig, mats);
+  } else if (type === 'emissor_escudo') {
+    buildEmissorEscudo(hullGroup, rig, mats);
+  } else if (type === 'enxame_corrosivo') {
+    buildEnxameCorrosivo(hullGroup, rig, mats);
+  } else if (type === 'atirador_elite') {
+    buildAtiradorElite(hullGroup, rig, mats);
+  } else if (type === 'sabotador_emp') {
+    buildSabotadorEmp(hullGroup, rig, mats);
+  } else if (type === 'escavador') {
+    buildEscavador(hullGroup, rig, mats);
+  } else if (type === 'corrosivo') {
+    buildCorrosivo(hullGroup, rig, mats);
+  } else if (type === 'piromante') {
+    buildPiromante(hullGroup, rig, mats);
+  } else if (type === 'criomante') {
+    buildCriomante(hullGroup, rig, mats);
+  } else if (type === 'tita_cerco') {
+    buildTitaCerco(hullGroup, rig, mats);
   }
 
   const clonedPerEnemy = new Map<THREE.Material, THREE.Material>();
@@ -1933,7 +2371,7 @@ export function createEnemyModel3D(type: string): EnemyRig3D {
       m.castShadow = true;
       m.receiveShadow = true;
 
-      if (type !== 'stealth' && origMat && !skipFlashSet.has(origMat)) {
+      if (type !== 'stealth' && type !== 'cacador_furtivo' && origMat && !skipFlashSet.has(origMat)) {
         let copy = clonedPerEnemy.get(origMat);
         if (!copy) {
           copy = origMat.clone();
@@ -1959,6 +2397,21 @@ export function createEnemyModel3D(type: string): EnemyRig3D {
   ewRing.visible = false;
   root.add(ewRing);
   rig.ewRing = ewRing;
+
+  const prepRing = new THREE.Mesh(
+    getGeo('enemy_prep_ring', () => new THREE.RingGeometry(1.5, 1.85, 24)),
+    new THREE.MeshBasicMaterial({
+      color: 0xef4444,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85
+    })
+  );
+  prepRing.rotation.x = -Math.PI / 2;
+  prepRing.position.y = 0.18;
+  prepRing.visible = false;
+  root.add(prepRing);
+  rig.prepRing = prepRing;
 
   return rig;
 }
@@ -2927,6 +3380,363 @@ function buildMegaBossKirov(hullGroup: THREE.Group, rig: EnemyRig3D, mats: Model
 }
 
 // ============================================================================
+// 20 NEW EXPANSION ENEMY MODELS
+// ============================================================================
+
+function addEnergyShieldDome(hullGroup: THREE.Group, rig: EnemyRig3D, radius = 1.45, y = 0.9) {
+  const es = new THREE.Mesh(
+    getGeo(`eshield_${radius}`, () => new THREE.SphereGeometry(radius, 16, 12)),
+    new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.22,
+      wireframe: true
+    })
+  );
+  es.position.y = y;
+  es.userData.noShadow = true;
+  es.castShadow = false;
+  es.receiveShadow = false;
+  hullGroup.add(es);
+  rig.energyShieldMesh = es;
+}
+
+function buildHumanoidSoldier(
+  hullGroup: THREE.Group,
+  rig: EnemyRig3D,
+  mats: ModelMaterials,
+  opts: {
+    scale?: number;
+    bodyMat?: THREE.Material;
+    accentMat?: THREE.Material;
+    weaponLen?: number;
+    hasBackpack?: boolean;
+    hasShield?: boolean;
+    hasHammer?: boolean;
+    hasRpg?: boolean;
+    hasMortar?: boolean;
+  }
+) {
+  const g = new THREE.Group();
+  const sc = opts.scale || 1.25;
+  g.scale.setScalar(sc);
+  hullGroup.add(g);
+
+  const bodyMat = opts.bodyMat || mats.rusCamo;
+  const accMat = opts.accentMat || mats.darkSteel;
+
+  rig.legs = [];
+  const legL = addBox(g, 0.22, 0.56, 0.24, mats.rusDark, -0.15, 0.28, 0);
+  const legR = addBox(g, 0.22, 0.56, 0.24, mats.rusDark, 0.15, 0.28, 0);
+  rig.legs.push(legL, legR);
+
+  addBox(g, 0.54, 0.6, 0.34, bodyMat, 0, 0.84, 0);
+  addBox(g, 0.46, 0.42, 0.12, accMat, 0, 0.88, 0.18);
+  addCyl(g, 0.2, 0.22, 0.3, 10, accMat, 0, 1.32, 0);
+  addBox(g, 0.28, 0.12, 0.12, mats.opticGreen, 0, 1.32, 0.17);
+
+  if (opts.hasBackpack) {
+    addBox(g, 0.44, 0.52, 0.28, accMat, 0, 0.9, -0.26);
+  }
+  if (opts.hasShield) {
+    addBox(g, 0.82, 1.18, 0.14, mats.steel, -0.15, 0.82, 0.46);
+    addBox(g, 0.45, 0.16, 0.08, mats.radarCyan, -0.15, 1.12, 0.55);
+  }
+  if (opts.hasHammer) {
+    addCyl(g, 0.05, 0.05, 1.1, 8, mats.steel, 0.42, 0.88, 0.36, Math.PI / 3, 0, 0);
+    addBox(g, 0.36, 0.32, 0.58, mats.gunmetal, 0.42, 1.18, 0.78);
+  } else if (opts.hasRpg) {
+    addCyl(g, 0.1, 0.1, 1.55, 10, mats.oliveDark, 0.34, 1.15, 0.25, Math.PI / 2, 0, 0);
+    addCyl(g, 0.04, 0.13, 0.28, 8, mats.shtoraRed, 0.34, 1.15, 1.1, Math.PI / 2, 0, 0);
+  } else if (opts.hasMortar) {
+    addCyl(g, 0.15, 0.18, 1.05, 10, mats.gunmetal, 0, 0.95, -0.22, -0.45, 0, 0);
+  } else {
+    const wLen = opts.weaponLen || 0.9;
+    addBox(g, 0.1, 0.14, wLen, mats.gunmetal, 0.28, 0.88, 0.38);
+  }
+}
+
+function buildCorredor(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  for (const [ox, oz] of [[0, 0.45], [-0.55, -0.42], [0.55, -0.42]]) {
+    const sub = new THREE.Group();
+    sub.position.set(ox, 0, oz);
+    const l1 = addBox(sub, 0.14, 0.42, 0.16, mats.rusDark, -0.1, 0.21, 0);
+    const l2 = addBox(sub, 0.14, 0.42, 0.16, mats.rusDark, 0.1, 0.21, 0);
+    if (!rig.legs) rig.legs = [];
+    rig.legs.push(l1, l2);
+    addBox(sub, 0.36, 0.42, 0.24, mats.shtoraRed, 0, 0.62, 0);
+    addCyl(sub, 0.13, 0.15, 0.2, 8, mats.darkSteel, 0, 0.96, 0);
+    addBox(sub, 0.04, 0.08, 0.52, mats.steel, -0.24, 0.62, 0.24);
+    addBox(sub, 0.04, 0.08, 0.52, mats.steel, 0.24, 0.62, 0.24);
+    hullGroup.add(sub);
+  }
+}
+
+function buildBatedorPlasma(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.25,
+    bodyMat: mats.navalGray,
+    accentMat: mats.radarCyan,
+    weaponLen: 0.72
+  });
+  addEnergyShieldDome(hullGroup, rig, 1.35, 0.95);
+}
+
+function buildEscudeiro(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.42,
+    bodyMat: mats.darkSteel,
+    accentMat: mats.steel,
+    hasShield: true,
+    weaponLen: 0.6
+  });
+}
+
+function buildBrutamontes(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.9,
+    bodyMat: mats.rusDark,
+    accentMat: mats.gunmetal,
+    hasHammer: true
+  });
+}
+
+function buildArtilheiro(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.45,
+    bodyMat: mats.oliveDark,
+    accentMat: mats.amberGlow,
+    hasBackpack: true,
+    hasMortar: true
+  });
+}
+
+function buildDemolidor(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.48,
+    bodyMat: mats.rusDark,
+    accentMat: mats.afterburner,
+    hasBackpack: true,
+    hasRpg: true
+  });
+}
+
+function buildDroneRecon(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  const airframe = new THREE.Group();
+  airframe.position.y = 3.6;
+  hullGroup.add(airframe);
+  addBox(airframe, 1.5, 0.14, 0.55, mats.navalGray, 0, 0, 0);
+  addCyl(airframe, 0.16, 0.22, 1.35, 10, mats.darkSteel, 0, 0, 0.1, Math.PI / 2, 0, 0);
+  addCyl(airframe, 0.12, 0.12, 0.1, 8, mats.radarCyan, 0, 0, 0.78, Math.PI / 2, 0, 0);
+  rig.rotors = [];
+  for (const px of [-0.72, 0.72]) {
+    const p = new THREE.Group();
+    p.position.set(px, 0.14, 0);
+    addBox(p, 0.65, 0.03, 0.08, mats.tire, 0, 0, 0);
+    airframe.add(p);
+    rig.rotors.push(p);
+  }
+  addEnergyShieldDome(hullGroup, rig, 1.45, 3.6);
+}
+
+function buildDroneBombardeiro(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  const airframe = new THREE.Group();
+  airframe.position.y = 4.2;
+  airframe.scale.setScalar(1.28);
+  hullGroup.add(airframe);
+  addBox(airframe, 2.35, 0.18, 0.85, mats.rusDark, 0, 0, 0);
+  addBox(airframe, 0.68, 0.42, 1.85, mats.gunmetal, 0, 0.05, 0.1);
+  addBox(airframe, 0.24, 0.22, 0.72, mats.afterburner, -0.25, -0.22, 0);
+  addBox(airframe, 0.24, 0.22, 0.72, mats.afterburner, 0.25, -0.22, 0);
+  rig.rotors = [];
+  for (const px of [-1.05, 1.05]) {
+    const p = new THREE.Group();
+    p.position.set(px, 0.2, 0);
+    addBox(p, 0.95, 0.04, 0.1, mats.amberGlow, 0, 0, 0);
+    airframe.add(p);
+    rig.rotors.push(p);
+  }
+}
+
+function buildCacadorFurtivo(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  const stealthMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.35,
+    metalness: 0.65,
+    transparent: true,
+    opacity: 0.34
+  });
+  const bladeMat = new THREE.MeshStandardMaterial({
+    color: 0xa855f7,
+    emissive: 0x7e22ce,
+    emissiveIntensity: 0.9,
+    transparent: true,
+    opacity: 0.55
+  });
+  rig.stealthMaterials = [stealthMat, bladeMat];
+
+  const g = new THREE.Group();
+  g.scale.setScalar(1.32);
+  hullGroup.add(g);
+  rig.legs = [
+    addBox(g, 0.18, 0.5, 0.2, stealthMat, -0.14, 0.25, 0),
+    addBox(g, 0.18, 0.5, 0.2, stealthMat, 0.14, 0.25, 0)
+  ];
+  addBox(g, 0.48, 0.56, 0.3, stealthMat, 0, 0.78, 0);
+  addCyl(g, 0.18, 0.2, 0.28, 10, stealthMat, 0, 1.24, 0);
+  addBox(g, 0.06, 0.1, 0.65, bladeMat, -0.28, 0.74, 0.35);
+  addBox(g, 0.06, 0.1, 0.65, bladeMat, 0.28, 0.74, 0.35);
+}
+
+function buildMedicoCombate(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.32,
+    bodyMat: mats.navalWhite,
+    accentMat: mats.opticGreen,
+    hasBackpack: true,
+    weaponLen: 0.72
+  });
+  addBox(hullGroup, 0.42, 0.14, 0.12, mats.opticGreen, 0, 1.25, -0.35);
+  addBox(hullGroup, 0.14, 0.42, 0.12, mats.opticGreen, 0, 1.25, -0.35);
+}
+
+function buildEmissorEscudo(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  const g = new THREE.Group();
+  hullGroup.add(g);
+  addCyl(g, 0.78, 0.94, 0.55, 10, mats.navalGray, 0, 0.42, 0);
+  rig.wheels = [
+    addMilitaryWheel(g, mats, -0.82, 0.32, 0.62, 0.22),
+    addMilitaryWheel(g, mats, 0.82, 0.32, 0.62, 0.22),
+    addMilitaryWheel(g, mats, -0.82, 0.32, -0.62, 0.22),
+    addMilitaryWheel(g, mats, 0.82, 0.32, -0.62, 0.22)
+  ];
+  addCyl(g, 0.18, 0.24, 0.95, 10, mats.darkSteel, 0, 1.1, 0);
+  const orb = new THREE.Mesh(getGeo('emissor_orb', () => new THREE.SphereGeometry(0.42, 14, 12)), mats.radarCyan);
+  orb.position.set(0, 1.75, 0);
+  g.add(orb);
+  addEnergyShieldDome(hullGroup, rig, 1.75, 1.1);
+}
+
+function buildEnxameCorrosivo(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  for (const [ox, oz] of [[0, 0.5], [-0.55, -0.35], [0.55, -0.35], [0, -0.65]]) {
+    const bug = new THREE.Group();
+    bug.position.set(ox, 0, oz);
+    addBox(bug, 0.34, 0.24, 0.52, mats.opticGreen, 0, 0.24, 0);
+    addBox(bug, 0.22, 0.16, 0.22, mats.oliveDark, 0, 0.28, 0.28);
+    hullGroup.add(bug);
+  }
+}
+
+function buildAtiradorElite(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.32,
+    bodyMat: mats.oliveDark,
+    accentMat: mats.shtoraRed,
+    weaponLen: 1.65
+  });
+}
+
+function buildSabotadorEmp(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.38,
+    bodyMat: mats.darkSteel,
+    accentMat: mats.empPurple,
+    hasBackpack: true,
+    weaponLen: 0.82
+  });
+  addCyl(hullGroup, 0.05, 0.05, 0.95, 8, mats.empPurple, -0.18, 1.75, -0.25);
+  addEnergyShieldDome(hullGroup, rig, 1.4, 1.0);
+}
+
+function buildEscavador(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  const g = new THREE.Group();
+  hullGroup.add(g);
+  addBox(g, 1.35, 0.62, 2.15, mats.darkSteel, 0, 0.56, -0.1);
+  for (const sx of [-0.78, 0.78]) {
+    addBox(g, 0.34, 0.42, 2.2, mats.tracks, sx, 0.26, -0.1);
+  }
+  const drillPivot = new THREE.Group();
+  drillPivot.position.set(0, 0.58, 1.35);
+  const cone = new THREE.Mesh(getGeo('escavador_drill', () => new THREE.ConeGeometry(0.55, 1.35, 10)), mats.amberGlow);
+  cone.rotation.x = Math.PI / 2;
+  drillPivot.add(cone);
+  g.add(drillPivot);
+  rig.rotors = [drillPivot];
+}
+
+function buildCorrosivo(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.65,
+    bodyMat: mats.olive,
+    accentMat: mats.opticGreen,
+    hasBackpack: true,
+    weaponLen: 1.15
+  });
+}
+
+function buildPiromante(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.55,
+    bodyMat: mats.shtoraRed,
+    accentMat: mats.afterburner,
+    hasBackpack: true,
+    weaponLen: 1.25
+  });
+}
+
+function buildCriomante(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  buildHumanoidSoldier(hullGroup, rig, mats, {
+    scale: 1.55,
+    bodyMat: mats.navalWhite,
+    accentMat: mats.radarCyan,
+    hasBackpack: true,
+    weaponLen: 1.25
+  });
+  addEnergyShieldDome(hullGroup, rig, 1.55, 1.05);
+}
+
+function buildTitaCerco(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMaterials) {
+  const g = new THREE.Group();
+  g.scale.setScalar(1.52);
+  hullGroup.add(g);
+
+  // Massive Quad-Track Siege Titan chassis
+  addBox(g, 2.25, 0.74, 4.1, mats.rusDark, 0, 0.72, 0);
+  for (const sx of [-1.25, 1.25]) {
+    addBox(g, 0.55, 0.56, 4.25, mats.tracks, sx, 0.36, 0);
+    for (let w = 0; w < 6; w++) {
+      addCyl(g, 0.26, 0.26, 0.58, 10, mats.steel, sx, 0.3, 1.5 - w * 0.6, 0, 0, Math.PI / 2);
+    }
+  }
+
+  rig.eraMeshes = [];
+  for (let i = -3; i <= 3; i++) {
+    rig.eraMeshes.push(addBox(g, 0.32, 0.16, 0.34, mats.amberGlow, i * 0.32, 1.06, 1.98, 0.35, 0, 0));
+  }
+
+  const turretPivot = new THREE.Group();
+  turretPivot.position.set(0, 1.18, 0.05);
+  g.add(turretPivot);
+  rig.turretPivot = turretPivot;
+
+  addBox(turretPivot, 1.78, 0.88, 2.15, mats.gunmetal, 0, 0.44, 0);
+  // Twin 203mm Siege Cannons + Seismic Shockwave Hammer Core
+  for (const bx of [-0.42, 0.42]) {
+    addCyl(turretPivot, 0.16, 0.19, 2.65, 12, mats.steel, bx, 0.56, 1.55, Math.PI / 2, 0, 0);
+  }
+  addBox(turretPivot, 1.1, 0.32, 0.24, mats.shtoraRed, 0, 0.96, -0.4);
+
+  const radar = new THREE.Group();
+  radar.position.set(0, 1.16, -0.2);
+  addBox(radar, 0.95, 0.22, 0.14, mats.radarCyan, 0, 0, 0);
+  turretPivot.add(radar);
+  rig.rotors = [radar];
+
+  addApsShieldSphere(hullGroup, rig, 3.45, 1.35);
+  addEnergyShieldDome(hullGroup, rig, 3.85, 1.35);
+}
+
+// ============================================================================
 // AIRSTRIKE, ORDNANCE & CACHED HOLOGRAPHIC GHOST HELPERS
 // ============================================================================
 
@@ -3034,23 +3844,27 @@ export function createB52Bomber3D(): THREE.Group {
   return jet;
 }
 
-export function createMissileMesh3D(
-  kind: 'javelin' | 'patriot' | 'hellfire' | 'rocket' | 'boss_missile' | 'boss_rocket' | 'boss_shell'
-): THREE.Group {
+export function createMissileMesh3D(kind: string): THREE.Group {
   const g = new THREE.Group();
   const mats = getMats();
-  const isBoss = kind.startsWith('boss_');
-  const isBig = kind === 'hellfire' || kind === 'patriot' || isBoss;
-  const r = kind === 'hellfire' ? 0.155 : isBoss ? 0.14 : isBig ? 0.115 : 0.09;
-  const len = kind === 'hellfire' ? 1.48 : isBoss ? 1.25 : isBig ? 1.15 : 0.85;
+  const isBoss = kind.startsWith('boss_') || kind.startsWith('enemy_');
+  const isBig = kind === 'hellfire' || kind === 'patriot' || kind.startsWith('boss_');
+  const r = kind === 'hellfire' ? 0.155 : isBoss ? 0.13 : isBig ? 0.115 : 0.085;
+  const len = kind === 'hellfire' ? 1.48 : isBoss ? 1.15 : isBig ? 1.15 : 0.85;
   const bodyMat =
     kind === 'patriot'
       ? mats.navalWhite
-      : isBoss
-        ? mats.shtoraRed
-        : kind === 'hellfire'
-          ? mats.darkSteel
-          : mats.olive;
+      : kind === 'enemy_emp'
+        ? mats.empPurple
+        : kind === 'enemy_acid' || kind === 'toxic'
+          ? mats.opticGreen
+          : kind === 'enemy_cryo' || kind === 'cryo'
+            ? mats.radarCyan
+            : isBoss
+              ? mats.shtoraRed
+              : kind === 'hellfire'
+                ? mats.darkSteel
+                : mats.olive;
 
   const bodyGeo = createLatheAlongZGeo([
     [0.001, len * 0.72],
@@ -3157,17 +3971,28 @@ export function prewarmAllMilitaryModels(
   scene.add(warmGroup);
 
   const towerIds = [
+    'ballista',
     'm2_bunker',
+    'abrams_pit',
+    'howitzer',
+    'sniper_tower',
+    'cryo_tower',
+    'tesla_tower',
+    'toxic_tower',
+    'flamethrower',
+    'helios_laser',
+    'railgun',
+    'patriot',
+    'phalanx',
+    'harpoon_tower',
+    'tos1_mlrs',
+    'minefield',
+    'ew_crew',
+    'eng_workshop',
+    'iron_dome',
+    'energy_extractor',
     'bushmaster',
     'javelin',
-    'phalanx',
-    'howitzer',
-    'patriot',
-    'ew_crew',
-    'abrams_pit',
-    'iron_dome',
-    'helios_laser',
-    'tos1_mlrs',
     'hesco'
   ];
 
@@ -3178,10 +4003,14 @@ export function prewarmAllMilitaryModels(
       ghostParent.add(gm.root);
     }
 
-    const maxLv = id === 'hesco' ? 1 : 3;
+    const maxLv = id === 'hesco' ? 1 : 4;
     for (let lv = 1; lv <= maxLv; lv++) {
       const rig = createTowerModel3D(id, lv);
       warmGroup.add(rig.root);
+    }
+    if (id !== 'hesco') {
+      warmGroup.add(createTowerModel3D(id, 5, 'A').root);
+      warmGroup.add(createTowerModel3D(id, 6, 'B').root);
     }
   }
 
@@ -3203,7 +4032,27 @@ export function prewarmAllMilitaryModels(
     'boss_armata',
     'megaboss_scud_convoy',
     'megaboss_object279',
-    'megaboss_kirov_airship'
+    'megaboss_kirov_airship',
+    'recruta',
+    'corredor',
+    'batedor_plasma',
+    'escudeiro',
+    'brutamontes',
+    'artilheiro',
+    'demolidor',
+    'drone_recon',
+    'drone_bombardeiro',
+    'cacador_furtivo',
+    'medico_combate',
+    'emissor_escudo',
+    'enxame_corrosivo',
+    'atirador_elite',
+    'sabotador_emp',
+    'escavador',
+    'corrosivo',
+    'piromante',
+    'criomante',
+    'tita_cerco'
   ];
   for (const et of enemyTypes) {
     warmGroup.add(createEnemyModel3D(et).root);

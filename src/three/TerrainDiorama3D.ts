@@ -13,7 +13,15 @@ export const WORLD_SCALE = CELL_WORLD / TILE_SIZE; // 4 / 64 = 0.0625
 export const BOARD_W = GRID_COLS * CELL_WORLD; // 112
 export const BOARD_D = GRID_ROWS * CELL_WORLD; // 64
 
-export type WorldBiome = 'desert' | 'arctic' | 'industrial';
+export type WorldBiome = 'desert' | 'arctic' | 'industrial' | 'forest' | 'canyon' | 'swamp' | 'volcanic';
+
+export interface StageTerrainFeatures {
+  iceCells?: Array<[number, number]>;
+  fogCells?: Array<[number, number]>;
+  toxicCells?: Array<[number, number]>;
+  lavaCells?: Array<[number, number]>;
+  restrictedCells?: Array<[number, number]>;
+}
 
 export interface GridPoint {
   col: number;
@@ -132,6 +140,74 @@ const BIOME_THEMES: Record<WorldBiome, BiomeTheme> = {
     foliageB: 0x52525b,
     scrub: 0x78350f,
     trimColor: 0xf97316
+  },
+  forest: {
+    gradColors: ['#3f5e36', '#4c703f', '#314c2a'],
+    patchA: 'rgba(104, 152, 74, 0.22)',
+    patchB: 'rgba(34, 58, 28, 0.22)',
+    speckA: 'rgba(163, 206, 116, 0.15)',
+    speckB: 'rgba(22, 38, 18, 0.2)',
+    shoulderColor: '#695c44',
+    roadColor: '#544634',
+    laneColor: 'rgba(217, 179, 108, 0.48)',
+    plinthColor: 0x2d3b26,
+    rockPrimary: 0x6b7280,
+    rockSecondary: 0x4b5563,
+    foliageA: 0x2f6b2e,
+    foliageB: 0x4d8b3e,
+    scrub: 0x65a30d,
+    trimColor: 0x4ade80
+  },
+  canyon: {
+    gradColors: ['#8c4b2f', '#a15a39', '#6e3722'],
+    patchA: 'rgba(194, 112, 68, 0.22)',
+    patchB: 'rgba(72, 34, 22, 0.24)',
+    speckA: 'rgba(228, 166, 118, 0.16)',
+    speckB: 'rgba(42, 18, 12, 0.22)',
+    shoulderColor: '#5c4b43',
+    roadColor: '#2d3138',
+    laneColor: 'rgba(251, 146, 60, 0.52)',
+    plinthColor: 0x4b291d,
+    rockPrimary: 0x9a4d32,
+    rockSecondary: 0x6b3222,
+    foliageA: 0x6b5c34,
+    foliageB: 0x7c6a3c,
+    scrub: 0x854d0e,
+    trimColor: 0xf97316
+  },
+  swamp: {
+    gradColors: ['#293d31', '#324a3b', '#1e2e24'],
+    patchA: 'rgba(65, 108, 72, 0.24)',
+    patchB: 'rgba(18, 30, 22, 0.3)',
+    speckA: 'rgba(132, 182, 118, 0.14)',
+    speckB: 'rgba(12, 20, 14, 0.26)',
+    shoulderColor: '#3f4a3d',
+    roadColor: '#2d352e',
+    laneColor: 'rgba(163, 230, 53, 0.45)',
+    plinthColor: 0x1a261f,
+    rockPrimary: 0x4b584d,
+    rockSecondary: 0x354037,
+    foliageA: 0x264b33,
+    foliageB: 0x4b7740,
+    scrub: 0x65a30d,
+    trimColor: 0xa3e635
+  },
+  volcanic: {
+    gradColors: ['#2a1d1c', '#362220', '#1c1212'],
+    patchA: 'rgba(185, 58, 24, 0.18)',
+    patchB: 'rgba(12, 8, 8, 0.34)',
+    speckA: 'rgba(249, 115, 22, 0.16)',
+    speckB: 'rgba(10, 6, 6, 0.3)',
+    shoulderColor: '#4a2b24',
+    roadColor: '#1d1b1e',
+    laneColor: 'rgba(239, 68, 68, 0.58)',
+    plinthColor: 0x281310,
+    rockPrimary: 0x373032,
+    rockSecondary: 0x1f191a,
+    foliageA: 0x7f1d1d,
+    foliageB: 0x991b1b,
+    scrub: 0xea580c,
+    trimColor: 0xef4444
   }
 };
 
@@ -255,6 +331,53 @@ function createTerrainTextures(
       ctx.lineTo(w, ry - 7);
       ctx.moveTo(0, ry + 7);
       ctx.lineTo(w, ry + 7);
+      ctx.stroke();
+    }
+  } else if (biome === 'forest') {
+    ctx.strokeStyle = 'rgba(134, 239, 172, 0.08)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 65; i++) {
+      const gx = rand() * w;
+      const gy = rand() * h;
+      ctx.beginPath();
+      ctx.ellipse(gx, gy, 35 + rand() * 55, 18 + rand() * 35, rand() * Math.PI, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else if (biome === 'canyon') {
+    ctx.strokeStyle = 'rgba(251, 146, 60, 0.14)';
+    ctx.lineWidth = 2.5;
+    for (let y = 30; y < h; y += 54) {
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 64) {
+        const wy = y + Math.cos(x * 0.01 + y * 0.02) * 10;
+        if (x === 0) ctx.moveTo(x, wy);
+        else ctx.lineTo(x, wy);
+      }
+      ctx.stroke();
+    }
+  } else if (biome === 'swamp') {
+    for (let i = 0; i < 38; i++) {
+      const mx = rand() * w;
+      const my = rand() * h;
+      const rad = 28 + rand() * 64;
+      ctx.fillStyle = 'rgba(20, 48, 36, 0.32)';
+      ctx.beginPath();
+      ctx.arc(mx, my, rad, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (biome === 'volcanic') {
+    ctx.strokeStyle = 'rgba(239, 68, 68, 0.38)';
+    ctx.lineWidth = 2.2;
+    for (let i = 0; i < 36; i++) {
+      let lx = rand() * w;
+      let ly = rand() * h;
+      ctx.beginPath();
+      ctx.moveTo(lx, ly);
+      for (let seg = 0; seg < 5; seg++) {
+        lx += (rand() - 0.5) * 95;
+        ly += (rand() - 0.5) * 95;
+        ctx.lineTo(lx, ly);
+      }
       ctx.stroke();
     }
   }
@@ -445,7 +568,8 @@ export function createBattlefieldDiorama3D(
   baseTerrain: Uint8Array[],
   biome: WorldBiome = 'desert',
   spawnPoints: GridPoint[] = [{ col: 0, row: 3, id: 'ALPHA' }, { col: 0, row: 12, id: 'BRAVO' }],
-  fobPoint: GridPoint = { col: 27, row: 7 }
+  fobPoint: GridPoint = { col: 27, row: 7 },
+  stageFeatures: StageTerrainFeatures = {}
 ): DioramaHandles {
   const group = new THREE.Group();
   const theme = BIOME_THEMES[biome] || BIOME_THEMES.desert;
@@ -682,8 +806,8 @@ export function createBattlefieldDiorama3D(
           outcrop.add(sub);
         }
 
-        if (biome === 'arctic') {
-          // Snowy pine trees
+        if (biome === 'arctic' || biome === 'forest' || biome === 'swamp') {
+          // Pine / forest / marsh trees
           for (let t = 0; t < 2; t++) {
             const ta = t * 2.7 + r * 0.9 + c * 0.4;
             const tree = new THREE.Group();
@@ -709,8 +833,13 @@ export function createBattlefieldDiorama3D(
             tree.add(c3);
             outcrop.add(tree);
           }
+        } else if (biome === 'volcanic') {
+          const spire = new THREE.Mesh(cone1Geo, scrubMat);
+          spire.position.set(0.3, 1.32, 0.2);
+          spire.scale.set(0.65, 1.4, 0.65);
+          outcrop.add(spire);
         } else {
-          // Desert scrub / arid acacia bush
+          // Desert / Canyon scrub
           const bush = new THREE.Mesh(bushGeo, scrubMat);
           bush.position.set(-1.05, 0.2, 0.88);
           bush.scale.set(1.2, 0.7, 1.1);
@@ -722,6 +851,35 @@ export function createBattlefieldDiorama3D(
       group.add(outcrop);
     }
   }
+
+  // 3b. Special Stage Terrain Feature Tiles (Restricted, Ice, Fog, Toxic, Lava)
+  const tileOverlayGeo = trackGeo(new THREE.PlaneGeometry(CELL_WORLD * 0.92, CELL_WORLD * 0.92));
+  const addFeatureTiles = (cells: Array<[number, number]> | undefined, color: number, opacity: number, yPos: number) => {
+    if (!cells || cells.length === 0) return;
+    const mat = trackMat(
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    for (const [c, r] of cells) {
+      if (c < 0 || c >= GRID_COLS || r < 0 || r >= GRID_ROWS) continue;
+      const { x, z } = cellToWorldCenter(c, r);
+      const tile = new THREE.Mesh(tileOverlayGeo, mat);
+      tile.rotation.x = -Math.PI / 2;
+      tile.position.set(x, yPos, z);
+      group.add(tile);
+    }
+  };
+
+  addFeatureTiles(stageFeatures.restrictedCells, 0x64748b, 0.38, 0.04);
+  addFeatureTiles(stageFeatures.iceCells, 0x7dd3fc, 0.28, 0.045);
+  addFeatureTiles(stageFeatures.fogCells, 0x94a3b8, 0.26, 0.16);
+  addFeatureTiles(stageFeatures.toxicCells, 0x84cc16, 0.28, 0.05);
+  addFeatureTiles(stageFeatures.lavaCells, 0xef4444, 0.45, 0.055);
 
   // 4. Illuminated Spawn Helipads
   const animatedBeacons: THREE.Mesh[] = [];

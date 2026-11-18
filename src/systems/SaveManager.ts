@@ -19,6 +19,7 @@ export interface SavedTowerSnapshot {
   col: number;
   row: number;
   level: number;
+  specialization?: 'A' | 'B' | null;
   hp: number;
   maxHp: number;
   effectiveCost: number;
@@ -84,7 +85,30 @@ const IDB_STORE = 'saves';
 const CURRENT_VERSION = 3;
 export const MAX_TECH_LEVEL = 5;
 
-const STARTER_TOWERS = ['m2_bunker', 'bushmaster', 'phalanx', 'hesco'];
+const STARTER_TOWERS = [
+  'ballista',
+  'm2_bunker',
+  'abrams_pit',
+  'howitzer',
+  'sniper_tower',
+  'cryo_tower',
+  'tesla_tower',
+  'toxic_tower',
+  'flamethrower',
+  'helios_laser',
+  'railgun',
+  'patriot',
+  'phalanx',
+  'harpoon_tower',
+  'tos1_mlrs',
+  'minefield',
+  'ew_crew',
+  'eng_workshop',
+  'iron_dome',
+  'energy_extractor',
+  'bushmaster',
+  'hesco'
+];
 const STARTER_SUPPORTS = ['a10', 'hellfire'];
 
 function createDefaultState(): SaveState {
@@ -95,7 +119,7 @@ function createDefaultState(): SaveState {
     unlockedSupports: [...STARTER_SUPPORTS],
     towerTech: {},
     completedStages: {},
-    unlockedStages: ['1-1'],
+    unlockedStages: ['1-1', '4-1'],
     selectedWorld: 1,
     selectedStage: 1,
     lastSavedAt: Date.now(),
@@ -115,7 +139,8 @@ function sanitizeTowerSnapshot(raw: unknown): SavedTowerSnapshot | null {
   if (typeof r.col !== 'number' || typeof r.row !== 'number') return null;
   if (!Number.isInteger(r.col) || !Number.isInteger(r.row)) return null;
 
-  const level = typeof r.level === 'number' && Number.isFinite(r.level) ? Math.max(1, Math.min(3, Math.floor(r.level))) : 1;
+  const level = typeof r.level === 'number' && Number.isFinite(r.level) ? Math.max(1, Math.min(6, Math.floor(r.level))) : 1;
+  const specialization = r.specialization === 'A' || r.specialization === 'B' ? r.specialization : null;
   const maxHp = typeof r.maxHp === 'number' && Number.isFinite(r.maxHp) && r.maxHp > 0 ? Math.round(r.maxHp) : 500;
   const hp = typeof r.hp === 'number' && Number.isFinite(r.hp) && r.hp > 0 ? Math.min(maxHp, Math.round(r.hp)) : maxHp;
 
@@ -124,6 +149,7 @@ function sanitizeTowerSnapshot(raw: unknown): SavedTowerSnapshot | null {
     col: r.col,
     row: r.row,
     level,
+    specialization,
     hp,
     maxHp,
     effectiveCost: typeof r.effectiveCost === 'number' && Number.isFinite(r.effectiveCost) ? Math.max(0, Math.round(r.effectiveCost)) : 100,
@@ -140,7 +166,7 @@ function sanitizeActiveMission(raw: unknown): ActiveMissionSnapshot | null {
   const m = raw as Record<string, unknown>;
   const worldId = typeof m.worldId === 'number' ? Math.floor(m.worldId) : 0;
   const stageId = typeof m.stageId === 'number' ? Math.floor(m.stageId) : 0;
-  if (worldId < 1 || worldId > 3 || stageId < 1 || stageId > 5) return null;
+  if (worldId < 1 || worldId > 4 || stageId < 1 || stageId > 5) return null;
 
   const towersRaw = Array.isArray(m.towers) ? m.towers : [];
   const towers: SavedTowerSnapshot[] = [];
@@ -214,7 +240,7 @@ export function validateAndSanitizeSave(parsed: unknown): SaveState | null {
     }
   }
 
-  const unlockedStages = new Set<string>(['1-1']);
+  const unlockedStages = new Set<string>(['1-1', '4-1']);
   if (Array.isArray(obj.unlockedStages)) {
     for (const st of obj.unlockedStages) {
       if (typeof st === 'string' && /^\d+-\d+$/.test(st)) unlockedStages.add(st);
@@ -246,7 +272,7 @@ export function validateAndSanitizeSave(parsed: unknown): SaveState | null {
   }
 
   const selectedWorld =
-    typeof obj.selectedWorld === 'number' && obj.selectedWorld >= 1 && obj.selectedWorld <= 3
+    typeof obj.selectedWorld === 'number' && obj.selectedWorld >= 1 && obj.selectedWorld <= 4
       ? Math.floor(obj.selectedWorld)
       : def.selectedWorld;
   const selectedStage =
@@ -522,7 +548,7 @@ export class SaveManager {
     let newlyUnlocked: string | null = null;
     if (stageId < 5) {
       newlyUnlocked = this.getStageKey(worldId, stageId + 1);
-    } else if (worldId < 3) {
+    } else if (worldId < 4) {
       newlyUnlocked = this.getStageKey(worldId + 1, 1);
     }
 
@@ -536,7 +562,7 @@ export class SaveManager {
   }
 
   unlockAllCampaign() {
-    for (let w = 1; w <= 3; w++) {
+    for (let w = 1; w <= 4; w++) {
       for (let s = 1; s <= 5; s++) {
         const key = this.getStageKey(w, s);
         if (!this.state.unlockedStages.includes(key)) {
