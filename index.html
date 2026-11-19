@@ -14,8 +14,8 @@
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <link rel="apple-touch-icon" href="./icon-192.png" />
     <title>DEFCON: Frontline — C4ISR Tactical Tower Defense</title>
-    <script type="module" crossorigin src="./assets/index-N6qlDF6M.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-Bu_e3_Bw.css">
+    <script type="module" crossorigin src="./assets/index-Cw-AlkR6.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BECKhxnB.css">
   </head>
   <body>
     <div id="app">
@@ -129,6 +129,66 @@
             <button class="btn-ping" data-ping="CASH" title="Preciso de Suprimento ($)! [G]">💰 $</button>
           </div>
           <div class="radar-alert hidden" id="radar-alert-banner"></div>
+          <!-- FLOATING TOP-DOWN AIR SUPPORT MENU -->
+          <div class="air-support-menu" id="air-support-menu">
+            <button
+              class="btn-air-support-toggle"
+              id="btn-air-support-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="air-support-dropdown"
+              title="Abrir Menu de Suporte Aéreo em Área [Q / E / B]"
+            >
+              <span>✈️ SUPORTE AÉREO</span>
+              <span class="air-sup-badge" id="air-support-ready-badge">0/3</span>
+              <span class="air-sup-caret">▾</span>
+            </button>
+            <div class="air-support-dropdown hidden" id="air-support-dropdown">
+              <div class="air-support-dropdown-head">
+                <span>✈️ ATAQUE AÉREO / REFORÇO</span>
+                <button
+                  class="btn-air-support-close"
+                  id="btn-air-support-close"
+                  type="button"
+                  title="Fechar menu"
+                >
+                  ✕
+                </button>
+              </div>
+              <div class="support-grid">
+                <button class="support-card" id="btn-a10" data-support="a10" type="button">
+                  <div class="sup-top">
+                    <span class="hotkey">Q</span>
+                    <span class="sup-name">A-10 WARTHOG</span>
+                    <span class="sup-cost">$200</span>
+                  </div>
+                  <div class="sup-desc">GAU-8 30mm Strafe (Arraste/R roda ângulo)</div>
+                  <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-a10"></div></div>
+                  <div class="sup-cd-text" id="txt-cd-a10">PRONTO</div>
+                </button>
+                <button class="support-card" id="btn-hellfire" data-support="hellfire" type="button">
+                  <div class="sup-top">
+                    <span class="hotkey">E</span>
+                    <span class="sup-name">AGM-114 HELLFIRE</span>
+                    <span class="sup-cost">$150</span>
+                  </div>
+                  <div class="sup-desc">Ataque cirúrgico antitanque no cursor</div>
+                  <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-hellfire"></div></div>
+                  <div class="sup-cd-text" id="txt-cd-hellfire">PRONTO</div>
+                </button>
+                <button class="support-card" id="btn-b52" data-support="b52" type="button">
+                  <div class="sup-top">
+                    <span class="hotkey">B</span>
+                    <span class="sup-name">B-52 CARPET</span>
+                    <span class="sup-cost" id="cost-b52">$350</span>
+                  </div>
+                  <div class="sup-desc">Tapete de bombas + zonas de fogo</div>
+                  <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-b52"></div></div>
+                  <div class="sup-cd-text" id="txt-cd-b52">PRONTO</div>
+                </button>
+              </div>
+            </div>
+          </div>
         </section>
 
         <div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
@@ -231,44 +291,11 @@
         </aside>
       </main>
 
-      <!-- BOTTOM BUILD ARSENAL & AIR SUPPORT DOCK -->
+      <!-- BOTTOM BUILD ARSENAL DOCK -->
       <footer class="dock">
         <div class="arsenal-column">
           <div class="arsenal-filters" id="arsenal-filters"></div>
           <div class="arsenal-grid" id="arsenal-grid"></div>
-        </div>
-        <div class="dock-divider"></div>
-        <div class="support-grid">
-          <button class="support-card" id="btn-a10" data-support="a10">
-            <div class="sup-top">
-              <span class="hotkey">Q</span>
-              <span class="sup-name">A-10 WARTHOG</span>
-              <span class="sup-cost">$200</span>
-            </div>
-            <div class="sup-desc">GAU-8 30mm Strafe (Arraste/R roda ângulo)</div>
-            <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-a10"></div></div>
-            <div class="sup-cd-text" id="txt-cd-a10">PRONTO</div>
-          </button>
-          <button class="support-card" id="btn-hellfire" data-support="hellfire">
-            <div class="sup-top">
-              <span class="hotkey">E</span>
-              <span class="sup-name">AGM-114 HELLFIRE</span>
-              <span class="sup-cost">$150</span>
-            </div>
-            <div class="sup-desc">Ataque cirúrgico antitanque no cursor</div>
-            <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-hellfire"></div></div>
-            <div class="sup-cd-text" id="txt-cd-hellfire">PRONTO</div>
-          </button>
-          <button class="support-card" id="btn-b52" data-support="b52">
-            <div class="sup-top">
-              <span class="hotkey">B</span>
-              <span class="sup-name">B-52 CARPET</span>
-              <span class="sup-cost" id="cost-b52">$350</span>
-            </div>
-            <div class="sup-desc">Tapete de bombas + zonas de fogo</div>
-            <div class="sup-cd-bar"><div class="sup-cd-fill" id="cd-b52"></div></div>
-            <div class="sup-cd-text" id="txt-cd-b52">PRONTO</div>
-          </button>
         </div>
       </footer>
     </div>
