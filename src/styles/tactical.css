@@ -617,26 +617,32 @@ html, body {
 
 /* === BOTTOM DOCK === */
 .dock {
-  min-height: 128px;
+  width: 100%;
+  min-height: 124px;
   flex-shrink: 0;
   background: linear-gradient(180deg, #0b131b 0%, #070c11 100%);
   border-top: 1px solid var(--border);
   display: flex;
   align-items: stretch;
   padding: 8px 10px;
-  gap: 10px;
+  gap: 8px;
+  overflow: hidden;
   position: relative;
   z-index: 20;
 }
 
 .arsenal-grid {
-  flex: 1 1 0%;
+  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding-bottom: 3px;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  padding-bottom: 4px;
   scrollbar-width: thin;
   scrollbar-color: #26394d transparent;
 }
@@ -657,6 +663,7 @@ html, body {
   text-align: left;
   transition: border-color 0.12s, transform 0.1s;
   position: relative;
+  touch-action: pan-x;
 }
 
 .build-card:hover {
@@ -741,17 +748,11 @@ html, body {
 .bc-cost { color: var(--green); font-weight: 800; white-space: nowrap; }
 .bc-stat { font-size: 11.5px; font-weight: 600; color: #cbd5e1; white-space: nowrap; }
 
-.dock-divider {
-  width: 1px;
-  background: var(--border);
-  flex-shrink: 0;
-}
-
 .support-grid {
-  flex-shrink: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 192px));
+  display: flex;
+  flex-direction: column;
   gap: 7px;
+  width: 100%;
 }
 
 .support-card {
@@ -1638,18 +1639,9 @@ html, body {
 
   .dock {
     min-height: 118px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
+    overflow: hidden;
     padding: 6px 8px max(8px, env(safe-area-inset-bottom));
-    gap: 8px;
-  }
-  .arsenal-grid {
-    flex: 0 0 auto;
-    overflow: visible;
-  }
-  .support-grid {
-    flex: 0 0 auto;
+    gap: 6px;
   }
 }
 
@@ -1694,9 +1686,6 @@ html, body {
   }
   .hotkey {
     display: none;
-  }
-  .support-grid {
-    grid-template-columns: repeat(3, minmax(150px, 174px));
   }
   .sup-top {
     font-size: 11.5px;
@@ -1746,8 +1735,14 @@ html, body {
     text-align: center;
   }
   .tool-banner {
+    top: 52px;
     font-size: 11.5px;
     padding: 6px 10px;
+  }
+  .boss-hud-bar {
+    top: 52px;
+    width: calc(100vw - 20px);
+    max-width: 420px;
   }
 }
 
@@ -1848,7 +1843,8 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  flex: 1 1 auto;
+  width: 100%;
+  flex: 1 1 100%;
   min-width: 0;
   overflow: hidden;
 }
@@ -1856,7 +1852,11 @@ html, body {
   display: flex;
   flex-wrap: nowrap;
   gap: 5px;
+  width: 100%;
+  flex-shrink: 0;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
   scrollbar-width: none;
   padding-bottom: 1px;
 }
@@ -2471,4 +2471,136 @@ html, body {
 }
 .btn-donate-chip:hover {
   background: rgba(250, 204, 21, 0.28);
+}
+
+/* ==========================================================================
+   FLOATING TOP-DOWN AIR SUPPORT DROPDOWN MENU
+   ========================================================================== */
+
+.air-support-menu {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.btn-air-support-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  color: #fde68a;
+  border-radius: 7px;
+  padding: 7px 11px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
+}
+
+.btn-air-support-toggle:hover {
+  border-color: #facc15;
+  background: rgba(30, 41, 59, 0.95);
+}
+
+.btn-air-support-toggle.has-ready {
+  border-color: #4ade80;
+  color: #f0fdf4;
+  box-shadow: 0 0 14px rgba(74, 222, 128, 0.28), 0 6px 18px rgba(0, 0, 0, 0.65);
+}
+
+.btn-air-support-toggle.active-strike {
+  border-color: #facc15;
+  background: rgba(250, 204, 21, 0.22);
+  color: #fef08a;
+}
+
+.btn-air-support-toggle.open .air-sup-caret {
+  transform: rotate(180deg);
+}
+
+.air-sup-caret {
+  display: inline-block;
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+.air-sup-badge {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  color: #facc15;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.btn-air-support-toggle.has-ready .air-sup-badge {
+  border-color: rgba(74, 222, 128, 0.65);
+  color: #4ade80;
+}
+
+.air-support-dropdown {
+  width: min(268px, calc(100vw - 20px));
+  max-height: calc(100dvh - 180px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: rgba(11, 19, 27, 0.97);
+  border: 1px solid rgba(250, 204, 21, 0.5);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(6px);
+}
+
+.air-support-dropdown-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.7);
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #facc15;
+  letter-spacing: 0.04em;
+}
+
+.btn-air-support-close {
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #e2e8f0;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .air-support-menu {
+    top: 8px;
+    right: 8px;
+  }
+  .btn-air-support-toggle {
+    padding: 6px 9px;
+    font-size: 11px;
+  }
+  .coop-squad-hud {
+    top: 8px;
+    left: 8px;
+    width: min(210px, calc(100vw - 165px));
+  }
 }

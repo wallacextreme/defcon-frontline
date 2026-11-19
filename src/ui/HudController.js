@@ -139,6 +139,11 @@ export class HudController {
       radioLog: document.getElementById('radio-log'),
       arsenalFilters: document.getElementById('arsenal-filters'),
       arsenalGrid: document.getElementById('arsenal-grid'),
+      airSupportMenu: document.getElementById('air-support-menu'),
+      btnAirSupportToggle: document.getElementById('btn-air-support-toggle'),
+      airSupportDropdown: document.getElementById('air-support-dropdown'),
+      btnAirSupportClose: document.getElementById('btn-air-support-close'),
+      airSupportReadyBadge: document.getElementById('air-support-ready-badge'),
       btnA10: document.getElementById('btn-a10'),
       btnHellfire: document.getElementById('btn-hellfire'),
       btnB52: document.getElementById('btn-b52'),
@@ -672,9 +677,41 @@ export class HudController {
     this.el.btnRepair.addEventListener('click', () => bus.emit('cmd:repairTower'));
     this.el.btnUpgrade.addEventListener('click', () => bus.emit('cmd:upgradeTower'));
     this.el.btnSell.addEventListener('click', () => bus.emit('cmd:sellTower'));
-    this.el.btnA10.addEventListener('click', () => bus.emit('cmd:selectSupport', 'a10'));
-    this.el.btnHellfire.addEventListener('click', () => bus.emit('cmd:selectSupport', 'hellfire'));
-    this.el.btnB52.addEventListener('click', () => bus.emit('cmd:selectSupport', 'b52'));
+    this.el.btnAirSupportToggle?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isClosed = this.el.airSupportDropdown?.classList.contains('hidden');
+      this.setAirSupportMenuOpen(Boolean(isClosed));
+    });
+    this.el.btnAirSupportClose?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.setAirSupportMenuOpen(false);
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (
+        this.el.airSupportMenu &&
+        !this.el.airSupportDropdown?.classList.contains('hidden') &&
+        !this.el.airSupportMenu.contains(e.target)
+      ) {
+        this.setAirSupportMenuOpen(false);
+      }
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this.setAirSupportMenuOpen(false);
+      }
+    });
+    this.el.btnA10.addEventListener('click', () => {
+      this.setAirSupportMenuOpen(false);
+      bus.emit('cmd:selectSupport', 'a10');
+    });
+    this.el.btnHellfire.addEventListener('click', () => {
+      this.setAirSupportMenuOpen(false);
+      bus.emit('cmd:selectSupport', 'hellfire');
+    });
+    this.el.btnB52.addEventListener('click', () => {
+      this.setAirSupportMenuOpen(false);
+      bus.emit('cmd:selectSupport', 'b52');
+    });
     this.el.btnMute.addEventListener('click', () => bus.emit('cmd:toggleMute'));
 
     this.el.tacticalPingBar?.querySelectorAll('.btn-ping').forEach((btn) => {
@@ -1333,6 +1370,22 @@ export class HudController {
     this.renderSupportButton('hellfire', s.airSupport.hellfire, s.budget, this.el.btnHellfire, this.el.cdHellfire, this.el.txtCdHellfire);
     this.renderSupportButton('b52', s.airSupport.b52, s.budget, this.el.btnB52, this.el.cdB52, this.el.txtCdB52);
 
+    const strikeKeys = ['a10', 'hellfire', 'b52'];
+    let unlockedStrikes = 0;
+    let readyStrikes = 0;
+    for (const key of strikeKeys) {
+      if (!saveManager.isSupportUnlocked(key)) continue;
+      unlockedStrikes += 1;
+      const sup = s.airSupport?.[key];
+      if (sup && sup.timer <= 0 && s.budget >= sup.cost) {
+        readyStrikes += 1;
+      }
+    }
+    if (this.el.airSupportReadyBadge) {
+      this.el.airSupportReadyBadge.textContent = unlockedStrikes > 0 ? `${readyStrikes}/${unlockedStrikes}` : '🔒';
+    }
+    this.el.btnAirSupportToggle?.classList.toggle('has-ready', readyStrikes > 0);
+
     if (this.selectedTower && this.selectedTower.nextUpgrade) {
       this.el.btnUpgrade.disabled = s.budget < this.selectedTower.nextUpgrade.cost;
     }
@@ -1379,20 +1432,32 @@ export class HudController {
     });
   }
 
+  setAirSupportMenuOpen(open) {
+    const isOpen = Boolean(open);
+    this.el.airSupportDropdown?.classList.toggle('hidden', !isOpen);
+    this.el.btnAirSupportToggle?.classList.toggle('open', isOpen);
+    if (this.el.btnAirSupportToggle) {
+      this.el.btnAirSupportToggle.setAttribute('aria-expanded', String(isOpen));
+    }
+  }
+
   renderActiveTool(tool) {
     this.activeTool = tool;
     for (const [id, btn] of this.buildCards) {
       btn.classList.toggle('selected', tool?.kind === 'build' && tool.towerId === id);
     }
-    this.el.btnA10.classList.toggle('selected', tool?.kind === 'support' && tool.supportId === 'a10');
-    this.el.btnHellfire.classList.toggle('selected', tool?.kind === 'support' && tool.supportId === 'hellfire');
-    this.el.btnB52.classList.toggle('selected', tool?.kind === 'support' && tool.supportId === 'b52');
+    const isSupportTool = tool?.kind === 'support';
+    this.el.btnAirSupportToggle?.classList.toggle('active-strike', Boolean(isSupportTool));
+    this.el.btnA10.classList.toggle('selected', isSupportTool && tool.supportId === 'a10');
+    this.el.btnHellfire.classList.toggle('selected', isSupportTool && tool.supportId === 'hellfire');
+    this.el.btnB52.classList.toggle('selected', isSupportTool && tool.supportId === 'b52');
 
     if (!tool) {
       this.el.toolBanner.classList.add('hidden');
       this.el.btnRotateA10?.classList.add('hidden');
       return;
     }
+    this.setAirSupportMenuOpen(false);
     this.setMobileSidebarOpen(false);
     this.el.toolBanner.classList.remove('hidden');
     const targetTextEl = this.el.toolBannerText || this.el.toolBanner;
