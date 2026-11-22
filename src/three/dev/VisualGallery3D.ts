@@ -12,7 +12,11 @@ import { TOWER_DEFINITIONS, TOWER_BUILD_ORDER } from '../../data/towers.js';
 import { WORLDS, getWorldConfig, getStageConfig } from '../../data/worlds.js';
 import { Pathfinder } from '../../systems/Pathfinder.js';
 import { getPBRTextures } from '../ProceduralPBRTextures.ts';
-import { createTowerModel3D, createGhostTower3D } from '../MilitaryModels3D.ts';
+import {
+  createTowerModel3D,
+  createGhostTower3D,
+  updateTowerWearBiomeDirtColor
+} from '../MilitaryModels3D.ts';
 import { resolveQualityConfig, getThreeToneMapping } from '../GraphicsQuality.ts';
 import { createBiomeEnvironment } from '../BiomeEnvironment3D.ts';
 import {
@@ -909,6 +913,7 @@ export function mountVisualGallery(adapterOverride?: GalleryPipelineAdapter): Ga
 
   const applyEnvironmentAndLighting = (biome: WorldBiome, stageCfg?: any) => {
     disposeEnvironment();
+    updateTowerWearBiomeDirtColor(biome);
 
     const biomeVis = LEGACY_BIOME_VISUALS[biome] || LEGACY_BIOME_VISUALS.desert;
 

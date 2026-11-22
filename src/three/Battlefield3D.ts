@@ -65,6 +65,7 @@ import {
   createB52Bomber3D,
   createMissileMesh3D,
   prewarmAllMilitaryModels,
+  updateTowerWearBiomeDirtColor,
   TowerRig3D,
   EnemyRig3D
 } from './MilitaryModels3D.ts';
@@ -83,6 +84,7 @@ import {
   DioramaHandles,
   WorldBiome
 } from './TerrainDiorama3D.ts';
+import { createDesertTerrainWarmMesh } from './TerrainSplatting3D.ts';
 import { Effects3D } from './Effects3D.ts';
 
 export const MAP_WIDTH = GRID_COLS * TILE_SIZE;
@@ -574,7 +576,7 @@ export class Battlefield3D {
     blending: THREE.AdditiveBlending
   });
   private ewPulseGeo = new THREE.RingGeometry(0.92, 1.0, 48);
-  private ownerRingGeo = new THREE.RingGeometry(1.42, 1.62, 28);
+  private ownerRingGeo = new THREE.RingGeometry(1.90, 1.99, 36);
   private pingBeaconGeo = new THREE.CylinderGeometry(0.14, 0.24, 9.5, 10, 1, true);
   private pingRingGeo = new THREE.RingGeometry(0.65, 0.9, 28);
 
@@ -839,6 +841,7 @@ export class Battlefield3D {
     warmRuntimeGroup.add(new THREE.Mesh(this.shellGeo, this.shellMat));
     warmRuntimeGroup.add(new THREE.Mesh(this.bulletGeo, this.bulletMat));
     warmRuntimeGroup.add(new THREE.Mesh(this.ruinGeo, this.ruinMat));
+    warmRuntimeGroup.add(createDesertTerrainWarmMesh());
     this.scene.add(warmRuntimeGroup);
 
     // Compile against the active composer offscreen RT when composer is enabled so RenderPass
@@ -1001,6 +1004,7 @@ export class Battlefield3D {
     hasFogCells = false
   ) {
     this.currentBiome = biome;
+    updateTowerWearBiomeDirtColor(biome);
     this.lastStageVisuals.skyColor = skyColor;
     this.lastStageVisuals.fogColor = fogColor;
     this.lastStageVisuals.sunColor = sunColor;
@@ -3104,11 +3108,14 @@ export class Battlefield3D {
         side: THREE.DoubleSide,
         transparent: true,
         opacity: multiplayer.isActive() ? 0.85 : 0.45,
-        depthWrite: false
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
       })
     );
     ownerRingMesh.rotation.x = -Math.PI / 2;
-    ownerRingMesh.position.set(wx, 0.06, wz);
+    ownerRingMesh.position.set(wx, 0.035, wz);
     this.scene.add(ownerRingMesh);
 
     const hpEl = document.createElement('div');
@@ -4235,12 +4242,10 @@ export class Battlefield3D {
         });
         for (const tower of this.towers) {
           this.decayTowerWeaponVisuals(tower, dt);
-          if (tower.defId === 'ew_crew' || tower.defId === 'iron_dome' || tower.defId === 'eng_workshop' || tower.defId === 'energy_extractor') {
-            if (tower.rig.radarPivots) {
-              tower.rig.radarPivots.forEach((dish, idx) => {
-                dish.rotation.y += dt * (2.4 + idx * 0.7);
-              });
-            }
+          if (tower.empDisabledTimer <= 0 && tower.rig.radarPivots?.length) {
+            tower.rig.radarPivots.forEach((dish, idx) => {
+              dish.rotation.y += dt * (2.4 + idx * 0.7);
+            });
           }
         }
         this.updateTransientBeams(dt);
@@ -4523,13 +4528,14 @@ export class Battlefield3D {
       const spec = getTowerLevelSpec(tower.def, tower.level, tower.specialization);
       if (!spec) continue;
 
-      // Support turret/radar rotation & pulse visual animation
+      if (tower.rig.radarPivots?.length) {
+        tower.rig.radarPivots.forEach((dish, idx) => {
+          dish.rotation.y += dt * (2.4 + idx * 0.7);
+        });
+      }
+
+      // Support turret rotation & pulse visual animation
       if (tower.defId === 'ew_crew' || tower.defId === 'iron_dome' || tower.defId === 'eng_workshop' || tower.defId === 'energy_extractor' || (tower.defId === 'cryo_tower' && spec.isCryoAura)) {
-        if (tower.rig.radarPivots) {
-          tower.rig.radarPivots.forEach((dish, idx) => {
-            dish.rotation.y += dt * (2.4 + idx * 0.7);
-          });
-        }
         if (tower.rig.turretPivot) {
           tower.rig.turretPivot.rotation.y += dt * (tower.defId === 'energy_extractor' ? 1.4 : 0.8);
         }
@@ -7459,7 +7465,7 @@ export class Battlefield3D {
 
         this.ghostGroup.visible = true;
         this.ghostGroup.position.set(wx, 0, wz);
-        (this.ghostTileHighlight.material as THREE.MeshBasicMaterial).color.setHex(valid ? 0x22c55e : 0xef4444);
+        (this.ghostTileHighlight.material as THREE.MeshBasicMaterial).color.setHex(valid ? 0x38bdf8 : 0xf97316);
 
         for (const [id, gm] of this.ghostModels) {
           const isMatch = id === this.activeTool.towerId;
@@ -7471,7 +7477,7 @@ export class Battlefield3D {
           const rW = spec.range * fogMult * WORLD_SCALE;
           this.ghostRangeRing.visible = true;
           this.ghostRangeRing.scale.setScalar(rW);
-          (this.ghostRangeRing.material as THREE.LineBasicMaterial).color.setHex(valid ? 0x22c55e : 0xef4444);
+          (this.ghostRangeRing.material as THREE.LineBasicMaterial).color.setHex(valid ? 0x38bdf8 : 0xf97316);
           if (spec.minRange > 0) {
             this.ghostMinRangeRing.visible = true;
             this.ghostMinRangeRing.scale.setScalar(spec.minRange * WORLD_SCALE);

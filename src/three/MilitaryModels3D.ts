@@ -1,6 +1,17 @@
 import * as THREE from 'three';
 import { createPBRMaterial } from './ProceduralPBRTextures.ts';
-import { applyMilitaryWearShader, MILITARY_WEAR_VARIANTS } from './SurfaceShaderKit.ts';
+import {
+  applyMilitaryWearShader,
+  MILITARY_WEAR_VARIANTS,
+  updateMilitaryWearDirtColor
+} from './SurfaceShaderKit.ts';
+import {
+  getRoundedBoxGeo,
+  getChamferedCylinderGeo,
+  mergeStaticGeometries,
+  createGhostEdges,
+  createContactShadowMesh
+} from './MilitaryGeometryKit.ts';
 
 /**
  * Real-world NATO & OpFor PBR military palette.
@@ -61,12 +72,28 @@ interface ModelMaterials {
   ewCyan: THREE.MeshStandardMaterial;
   empPurple: THREE.MeshStandardMaterial;
   rotorDisc: THREE.MeshStandardMaterial;
+  specTrimA: THREE.MeshStandardMaterial;
+  specTrimB: THREE.MeshStandardMaterial;
+  specTrimTier: THREE.MeshStandardMaterial;
+  ewRingSubtle: THREE.MeshStandardMaterial;
   muzzleFlashGold: THREE.MeshBasicMaterial;
   muzzleFlashCyan: THREE.MeshBasicMaterial;
 }
 
+const TOWER_BIOME_DIRT_COLORS: Record<string, number> = {
+  desert: 0x6b583e,
+  arctic: 0x9bb2c9,
+  industrial: 0x2a2f36,
+  forest: 0x364429,
+  canyon: 0x6e3a25,
+  swamp: 0x253429,
+  volcanic: 0x231715
+};
+
+let activeTowerDirtColor = TOWER_BIOME_DIRT_COLORS.desert;
 let cachedMats: ModelMaterials | null = null;
 const geoCache = new Map<string, THREE.BufferGeometry>();
+const mergedGeoCache = new Map<string, THREE.BufferGeometry>();
 const ghostCache = new Map<string, { root: THREE.Group; setValid: (valid: boolean) => void }>();
 
 function getGeo<T extends THREE.BufferGeometry>(key: string, factory: () => T): T {
@@ -77,38 +104,243 @@ function getGeo<T extends THREE.BufferGeometry>(key: string, factory: () => T): 
   return g;
 }
 
+function getChamferedBoxGeo(w: number, h: number, d: number, bevel = 0.03): THREE.BufferGeometry {
+  const b = Math.max(0.002, Math.min(bevel, w * 0.22, h * 0.22, d * 0.22));
+  const key = `cbox:${w.toFixed(4)}:${h.toFixed(4)}:${d.toFixed(4)}:${b.toFixed(4)}`;
+  return getGeo(key, () => {
+    const hw = Math.max(0.002, w * 0.5 - b);
+    const hh = Math.max(0.002, h * 0.5 - b);
+    const coreD = Math.max(0.004, d - 2 * b);
+    const shape = new THREE.Shape();
+    shape.moveTo(-hw, -hh);
+    shape.lineTo(hw, -hh);
+    shape.lineTo(hw, hh);
+    shape.lineTo(-hw, hh);
+    shape.closePath();
+
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: coreD,
+      bevelEnabled: true,
+      bevelSegments: 1,
+      steps: 1,
+      bevelSize: b,
+      bevelThickness: b
+    });
+    geo.translate(0, 0, -coreD * 0.5);
+    geo.computeVertexNormals();
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    return geo;
+  });
+}
+
+type StructuralMatKey = keyof ModelMaterials;
+
+interface BatchItem {
+  pivotKey: string;
+  matKey: StructuralMatKey;
+  geo: THREE.BufferGeometry;
+  px: number;
+  py: number;
+  pz: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  sx: number;
+  sy: number;
+  sz: number;
+}
+
+const batchScratchPos = new THREE.Vector3();
+const batchScratchEuler = new THREE.Euler();
+const batchScratchQuat = new THREE.Quaternion();
+const batchScratchScale = new THREE.Vector3();
+const batchScratchMat = new THREE.Matrix4();
+
+/**
+ * Collects static geometry parts by `(pivotKey, matKey)`, transforming temporary clones
+ * and caching one merged BufferGeometry per `(defId, vLevel, spec, pivotKey, matKey)`.
+ */
+class StaticMeshBatcher {
+  private readonly cachePrefix: string;
+  private readonly items: BatchItem[] = [];
+
+  constructor(defId: string, vLevel: number, spec: 'A' | 'B' | null) {
+    this.cachePrefix = `${defId}:${vLevel}:${spec ?? 'none'}`;
+  }
+
+  add(
+    pivotKey: string,
+    matKey: StructuralMatKey,
+    geo: THREE.BufferGeometry,
+    px = 0,
+    py = 0,
+    pz = 0,
+    rx = 0,
+    ry = 0,
+    rz = 0,
+    sx = 1,
+    sy = 1,
+    sz = 1
+  ): void {
+    this.items.push({ pivotKey, matKey, geo, px, py, pz, rx, ry, rz, sx, sy, sz });
+  }
+
+  flush(pivots: Record<string, THREE.Object3D>, mats: ModelMaterials): THREE.Mesh[] {
+    const groups = new Map<string, { pivotKey: string; matKey: StructuralMatKey; list: BatchItem[] }>();
+    for (let i = 0; i < this.items.length; i++) {
+      const it = this.items[i];
+      const gk = `${it.pivotKey}:${it.matKey}`;
+      let g = groups.get(gk);
+      if (!g) {
+        g = { pivotKey: it.pivotKey, matKey: it.matKey, list: [] };
+        groups.set(gk, g);
+      }
+      g.list.push(it);
+    }
+
+    const created: THREE.Mesh[] = [];
+    for (const { pivotKey, matKey, list } of groups.values()) {
+      const parent = pivots[pivotKey];
+      if (!parent) continue;
+
+      const cacheKey = `${this.cachePrefix}:${pivotKey}:${matKey}`;
+      let mergedGeo = mergedGeoCache.get(cacheKey);
+      if (!mergedGeo) {
+        const clones: THREE.BufferGeometry[] = new Array(list.length);
+        for (let i = 0; i < list.length; i++) {
+          const it = list[i];
+          const clone = it.geo.clone();
+          batchScratchPos.set(it.px, it.py, it.pz);
+          batchScratchEuler.set(it.rx, it.ry, it.rz);
+          batchScratchQuat.setFromEuler(batchScratchEuler);
+          batchScratchScale.set(it.sx, it.sy, it.sz);
+          batchScratchMat.compose(batchScratchPos, batchScratchQuat, batchScratchScale);
+          clone.applyMatrix4(batchScratchMat);
+          clones[i] = clone;
+        }
+        mergedGeo = mergeStaticGeometries(clones, {
+          preserveVertexColors: false,
+          disposeInputs: true
+        });
+        mergedGeoCache.set(cacheKey, mergedGeo);
+      }
+
+      const mesh = new THREE.Mesh(mergedGeo, mats[matKey] as THREE.Material);
+      mesh.name = `${pivotKey}_${matKey}`;
+      const isEmissiveTrim = matKey === 'specTrimA' || matKey === 'specTrimB' || matKey === 'specTrimTier';
+      if (isEmissiveTrim || matKey === 'diamondPlate' || pivotKey.startsWith('radar_')) {
+        mesh.userData.noShadow = true;
+        mesh.castShadow = false;
+        if (isEmissiveTrim) {
+          mesh.receiveShadow = false;
+        }
+      }
+      parent.add(mesh);
+      created.push(mesh);
+    }
+
+    return created;
+  }
+}
+
+function getCutCornerSlabGeo(
+  w: number,
+  h: number,
+  d: number,
+  corner = 0.55,
+  bevel = 0.03
+): THREE.BufferGeometry {
+  const b = Math.min(bevel, h * 0.25);
+  const hw = Math.max(0.05, w * 0.5 - b);
+  const hd = Math.max(0.05, d * 0.5 - b);
+  const c = Math.max(0.04, Math.min(corner, hw * 0.72, hd * 0.72));
+  const coreH = Math.max(0.02, h - 2 * b);
+  return createPlanExtrudeGeo(
+    [
+      [-hw + c, -hd],
+      [hw - c, -hd],
+      [hw, -hd + c],
+      [hw, hd - c],
+      [hw - c, hd],
+      [-hw + c, hd],
+      [-hw, hd - c],
+      [-hw, -hd + c]
+    ],
+    coreH,
+    b,
+    b
+  );
+}
+
+function createBatchedMissileCapsMesh(
+  cacheKey: string,
+  positions: ReadonlyArray<[number, number, number]>,
+  r: number,
+  mat: THREE.Material,
+  lengthScale = 1.0,
+  radialSegs = 12
+): THREE.Mesh {
+  let mergedGeo = mergedGeoCache.get(cacheKey);
+  if (!mergedGeo) {
+    const baseGeo = createLatheAlongZGeo(
+      [
+        [r * 0.95, 0],
+        [r * 0.95, r * 0.7 * lengthScale],
+        [r * 0.55, r * 1.45 * lengthScale],
+        [0.001, r * 1.9 * lengthScale]
+      ],
+      radialSegs
+    );
+    const clones: THREE.BufferGeometry[] = new Array(positions.length);
+    for (let i = 0; i < positions.length; i++) {
+      const [px, py, pz] = positions[i];
+      const clone = baseGeo.clone();
+      clone.translate(px, py, pz);
+      clones[i] = clone;
+    }
+    mergedGeo = mergeStaticGeometries(clones, {
+      preserveVertexColors: false,
+      disposeInputs: true
+    });
+    mergedGeoCache.set(cacheKey, mergedGeo);
+  }
+  const mesh = new THREE.Mesh(mergedGeo, mat);
+  mesh.name = 'missileCaps_batched';
+  mesh.userData.noShadow = true;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  return mesh;
+}
+
 export function getMats(): ModelMaterials {
   if (cachedMats) return cachedMats;
 
-  cachedMats = {
+  const mats: ModelMaterials = {
     olive: createPBRMaterial('natoArmorPlate', {
       color: 0xd4dcbe,
-      roughness: 0.68,
-      metalness: 0.24,
-      envMapIntensity: 1.15,
-      bumpScale: 0.035,
-      repeat: [1.5, 1.5]
+      roughness: 0.74,
+      metalness: 0.04,
+      envMapIntensity: 1.05,
+      repeat: [1, 1]
     }),
     oliveDark: createPBRMaterial('natoArmorPlate', {
       color: 0x9aa484,
-      roughness: 0.72,
-      metalness: 0.28,
-      envMapIntensity: 1.1,
-      bumpScale: 0.035,
-      repeat: [1.5, 1.5]
+      roughness: 0.76,
+      metalness: 0.05,
+      envMapIntensity: 1.0,
+      repeat: [1, 1]
     }),
     desertArmor: createPBRMaterial('desertCarcPlate', {
       color: 0xede6d3,
-      roughness: 0.74,
-      metalness: 0.16,
-      envMapIntensity: 1.05,
-      bumpScale: 0.03,
-      repeat: [1.5, 1.5]
+      roughness: 0.78,
+      metalness: 0.04,
+      envMapIntensity: 1.0,
+      repeat: [1, 1]
     }),
     sandbag: createPBRMaterial('sandbagBurlap', {
       roughness: 0.94,
-      metalness: 0.02,
-      bumpScale: 0.08,
+      metalness: 0.0,
       envMapIntensity: 0.65,
       repeat: [1.2, 1.2]
     }),
@@ -131,42 +363,38 @@ export function getMats(): ModelMaterials {
       envMapIntensity: 1.25
     }),
     diamondPlate: createPBRMaterial('diamondSteelPlate', {
-      roughness: 0.42,
+      roughness: 0.46,
       metalness: 0.78,
-      bumpScale: 0.055,
-      envMapIntensity: 1.25,
+      normalScale: new THREE.Vector2(0.42, 0.42),
+      envMapIntensity: 1.15,
       repeat: [2, 2]
     }),
     concrete: createPBRMaterial('concreteBunker', {
       color: 0xd0d4da,
       roughness: 0.9,
-      metalness: 0.06,
-      bumpScale: 0.045,
-      envMapIntensity: 0.8,
-      repeat: [1.5, 1.5]
+      metalness: 0.02,
+      envMapIntensity: 0.78,
+      repeat: [1, 1]
     }),
     concreteDark: createPBRMaterial('concreteBunker', {
       color: 0x9298a0,
       roughness: 0.88,
-      metalness: 0.1,
-      bumpScale: 0.045,
-      envMapIntensity: 0.85,
-      repeat: [1.5, 1.5]
+      metalness: 0.03,
+      envMapIntensity: 0.82,
+      repeat: [1, 1]
     }),
     rusCamo: createPBRMaterial('opforCamoPlate', {
-      roughness: 0.7,
-      metalness: 0.24,
-      bumpScale: 0.035,
-      envMapIntensity: 1.1,
-      repeat: [1.5, 1.5]
+      roughness: 0.72,
+      metalness: 0.04,
+      envMapIntensity: 1.05,
+      repeat: [1, 1]
     }),
     rusDark: createPBRMaterial('opforCamoPlate', {
       color: 0xa2afa2,
-      roughness: 0.74,
-      metalness: 0.28,
-      bumpScale: 0.035,
-      envMapIntensity: 1.1,
-      repeat: [1.5, 1.5]
+      roughness: 0.75,
+      metalness: 0.05,
+      envMapIntensity: 1.05,
+      repeat: [1, 1]
     }),
     blackShark: new THREE.MeshStandardMaterial({
       color: 0x1a1e24,
@@ -177,33 +405,31 @@ export function getMats(): ModelMaterials {
     tracks: createPBRMaterial('tankTracks', {
       roughness: 0.62,
       metalness: 0.65,
-      bumpScale: 0.075,
       envMapIntensity: 1.1,
       repeat: [1, 3.2]
     }),
     tire: createPBRMaterial('offroadTire', {
       roughness: 0.86,
-      metalness: 0.08,
-      bumpScale: 0.07,
-      envMapIntensity: 0.75,
+      metalness: 0.02,
+      envMapIntensity: 0.72,
       repeat: [2, 1]
     }),
     navalWhite: new THREE.MeshStandardMaterial({
-      color: PALETTE.navalWhite,
-      roughness: 0.28,
-      metalness: 0.3,
-      envMapIntensity: 1.2
+      color: 0xd8dde4,
+      roughness: 0.42,
+      metalness: 0.04,
+      envMapIntensity: 1.0
     }),
     navalGray: new THREE.MeshStandardMaterial({
       color: PALETTE.navalGray,
-      roughness: 0.42,
-      metalness: 0.62,
-      envMapIntensity: 1.2
+      roughness: 0.56,
+      metalness: 0.05,
+      envMapIntensity: 1.05
     }),
     copperAesa: new THREE.MeshStandardMaterial({
       color: 0xd97706,
       emissive: 0x451a03,
-      emissiveIntensity: 0.45,
+      emissiveIntensity: 0.35,
       roughness: 0.26,
       metalness: 0.85,
       envMapIntensity: 1.35
@@ -211,7 +437,7 @@ export function getMats(): ModelMaterials {
     camoNet: new THREE.MeshStandardMaterial({
       color: 0x5b6331,
       roughness: 0.92,
-      metalness: 0.05,
+      metalness: 0.0,
       side: THREE.DoubleSide
     }),
     brass: new THREE.MeshStandardMaterial({
@@ -287,6 +513,38 @@ export function getMats(): ModelMaterials {
       depthWrite: false,
       side: THREE.DoubleSide
     }),
+    // Discrete tactical trims (< bloom threshold 1.14) for <= 5% emissive area
+    specTrimA: new THREE.MeshStandardMaterial({
+      color: PALETTE.radarCyan,
+      emissive: 0x0891b2,
+      emissiveIntensity: 0.65,
+      roughness: 0.32,
+      metalness: 0.45
+    }),
+    specTrimB: new THREE.MeshStandardMaterial({
+      color: PALETTE.amber,
+      emissive: 0xb45309,
+      emissiveIntensity: 0.65,
+      roughness: 0.32,
+      metalness: 0.45
+    }),
+    specTrimTier: new THREE.MeshStandardMaterial({
+      color: 0x22c55e,
+      emissive: 0x15803d,
+      emissiveIntensity: 0.55,
+      roughness: 0.35,
+      metalness: 0.45
+    }),
+    ewRingSubtle: new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0ea5e9,
+      emissiveIntensity: 0.85,
+      transparent: true,
+      opacity: 0.36,
+      roughness: 0.25,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    }),
     // HDR MeshBasicMaterial (color > 1 triggers UnrealBloomPass without ANY PointLight)
     muzzleFlashGold: new THREE.MeshBasicMaterial({
       color: new THREE.Color(2.4, 1.75, 0.55),
@@ -304,7 +562,62 @@ export function getMats(): ModelMaterials {
     })
   };
 
+  // Global SurfaceShaderKit wear shader strictly partitioned into 3 canonical variants
+  for (const key of ['olive', 'oliveDark', 'desertArmor', 'navalGray'] as const) {
+    applyMilitaryWearShader(mats[key], {
+      variantKey: MILITARY_WEAR_VARIANTS.ARMOR,
+      dirtHeight: 0.72,
+      dirtStrength: 0.34,
+      dirtColor: activeTowerDirtColor,
+      edgeWearStrength: 0.18,
+      macroVarStrength: 0.06
+    });
+  }
+  applyMilitaryWearShader(mats.navalWhite, {
+    variantKey: MILITARY_WEAR_VARIANTS.ARMOR,
+    dirtHeight: 0.55,
+    dirtStrength: 0.22,
+    dirtColor: activeTowerDirtColor,
+    edgeWearStrength: 0.12,
+    macroVarStrength: 0.04
+  });
+
+  for (const key of ['gunmetal', 'steel', 'darkSteel', 'diamondPlate'] as const) {
+    applyMilitaryWearShader(mats[key], {
+      variantKey: MILITARY_WEAR_VARIANTS.STEEL,
+      dirtHeight: 0.6,
+      dirtStrength: 0.28,
+      dirtColor: activeTowerDirtColor,
+      edgeWearStrength: 0.22,
+      macroVarStrength: 0.05
+    });
+  }
+
+  for (const key of ['concrete', 'concreteDark', 'sandbag'] as const) {
+    applyMilitaryWearShader(mats[key], {
+      variantKey: MILITARY_WEAR_VARIANTS.CONCRETE,
+      dirtHeight: 0.55,
+      dirtStrength: 0.4,
+      dirtColor: activeTowerDirtColor,
+      edgeWearStrength: 0.07,
+      macroVarStrength: 0.07
+    });
+  }
+
+  cachedMats = mats;
   return cachedMats;
+}
+
+/**
+ * Updates the world-space base dirt color uniform across all structural tower materials in-place.
+ */
+export function updateTowerWearBiomeDirtColor(biome: string): void {
+  const dirtHex = TOWER_BIOME_DIRT_COLORS[biome] ?? TOWER_BIOME_DIRT_COLORS.desert;
+  activeTowerDirtColor = dirtHex;
+  if (!cachedMats) return;
+  for (const mat of Object.values(cachedMats)) {
+    updateMilitaryWearDirtColor(mat, dirtHex);
+  }
 }
 
 // ============================================================================
@@ -508,16 +821,18 @@ function addMissileCap(
   x: number,
   y: number,
   z: number,
-  mat: THREE.Material
+  mat: THREE.Material,
+  lengthScale = 1.0,
+  radialSegs = 8
 ): THREE.Mesh {
   const capGeo = createLatheAlongZGeo(
     [
       [r * 0.95, 0],
-      [r * 0.95, r * 0.7],
-      [r * 0.55, r * 1.45],
-      [0.001, r * 1.9]
+      [r * 0.95, r * 0.7 * lengthScale],
+      [r * 0.55, r * 1.45 * lengthScale],
+      [0.001, r * 1.9 * lengthScale]
     ],
-    10
+    radialSegs
   );
   const cap = new THREE.Mesh(capGeo, mat);
   cap.position.set(x, y, z);
@@ -623,13 +938,13 @@ export function createTowerModel3D(
   } else if (defId === 'javelin') {
     buildJavelin(root, rig, mats, vLevel);
   } else if (defId === 'phalanx') {
-    buildPhalanx(root, rig, mats, vLevel);
+    buildPhalanx(root, rig, mats, vLevel, specialization);
   } else if (defId === 'howitzer') {
-    buildHowitzer(root, rig, mats, vLevel);
+    buildHowitzer(root, rig, mats, vLevel, specialization);
   } else if (defId === 'patriot') {
-    buildPatriot(root, rig, mats, vLevel);
+    buildPatriot(root, rig, mats, vLevel, specialization);
   } else if (defId === 'ew_crew') {
-    buildEwCrew(root, rig, mats, vLevel);
+    buildEwCrew(root, rig, mats, vLevel, specialization);
   } else if (defId === 'abrams_pit') {
     buildAbramsPit(root, rig, mats, vLevel);
   } else if (defId === 'iron_dome') {
@@ -645,7 +960,7 @@ export function createTowerModel3D(
   } else if (defId === 'cryo_tower') {
     buildCryoTower(root, rig, mats, vLevel);
   } else if (defId === 'tesla_tower') {
-    buildTeslaTower(root, rig, mats, vLevel);
+    buildTeslaTower(root, rig, mats, vLevel, specialization);
   } else if (defId === 'toxic_tower') {
     buildToxicTower(root, rig, mats, vLevel);
   } else if (defId === 'flamethrower') {
@@ -662,30 +977,36 @@ export function createTowerModel3D(
     buildEnergyExtractor(root, rig, mats, vLevel);
   }
 
-  // Visual tier / specialization emblem ring on base
-  if (level >= 4 || specialization) {
+  // Visual tier / specialization emblem ring on base (legacy towers only; remodeled slice towers embed 5A/6B trim directly)
+  const isRemodeledSliceTower =
+    defId === 'howitzer' ||
+    defId === 'patriot' ||
+    defId === 'tesla_tower' ||
+    defId === 'phalanx' ||
+    defId === 'ew_crew';
+  if (!isRemodeledSliceTower && (level >= 4 || specialization)) {
     const ringMat =
       specialization === 'A'
-        ? mats.radarCyan
+        ? mats.specTrimA
         : specialization === 'B'
-          ? mats.amberGlow
-          : mats.opticGreen;
+          ? mats.specTrimB
+          : mats.specTrimTier;
     const specRing = new THREE.Mesh(
-      getGeo('tower_spec_ring', () => new THREE.TorusGeometry(1.78, 0.055, 8, 28)),
+      getGeo('tower_spec_ring_v2', () => new THREE.TorusGeometry(1.78, 0.032, 6, 28)),
       ringMat
     );
     specRing.rotation.x = Math.PI / 2;
-    specRing.position.y = 0.24;
+    specRing.position.y = 0.22;
     specRing.userData.noShadow = true;
     root.add(specRing);
 
     if (level >= 6 && specialization) {
       const crownRing = new THREE.Mesh(
-        getGeo('tower_master_ring', () => new THREE.TorusGeometry(1.92, 0.045, 8, 28)),
-        specialization === 'A' ? mats.sapphireOptic : mats.afterburner
+        getGeo('tower_master_ring_v2', () => new THREE.TorusGeometry(1.9, 0.026, 6, 28)),
+        specialization === 'A' ? mats.specTrimA : mats.specTrimB
       );
       crownRing.rotation.x = Math.PI / 2;
-      crownRing.position.y = 0.34;
+      crownRing.position.y = 0.3;
       crownRing.userData.noShadow = true;
       root.add(crownRing);
     }
@@ -1205,48 +1526,194 @@ function buildJavelin(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, 
   }
 }
 
-function buildPhalanx(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
-  addCyl(root, 1.54, 1.66, 0.24, 12, mats.concreteDark, 0, 0.12, 0);
-  addCyl(root, 1.32, 1.38, 0.16, 12, mats.diamondPlate, 0, 0.3, 0);
+function buildPhalanx(
+  root: THREE.Group,
+  rig: TowerRig3D,
+  mats: ModelMaterials,
+  level: number,
+  specialization: 'A' | 'B' | null = null
+) {
+  const batcher = new StaticMeshBatcher('phalanx', level, specialization);
+  const specA = specialization === 'A';
+  const specB = specialization === 'B';
+
+  root.add(createContactShadowMesh(1.85, 0.42));
+
+  // Base cylinder & diamond deck (footprint strictly <= 1.76u for ownerRingMesh clearance)
+  batcher.add('root', 'concreteDark', getChamferedCylinderGeo(1.52, 1.62, 0.22, 12, 0.04), 0, 0.11, 0);
+  batcher.add('root', 'diamondPlate', getChamferedCylinderGeo(1.3, 1.36, 0.16, 12, 0.03), 0, 0.29, 0);
 
   if (level >= 3) {
+    const stabArmGeo = getChamferedBoxGeo(0.24, 0.16, 0.68, 0.025);
+    const stabPadGeo = getChamferedCylinderGeo(0.16, 0.18, 0.12, 6, 0.02);
     for (const a of [0.78, 2.35, 3.92, 5.49]) {
-      addBox(root, 0.28, 0.2, 0.92, mats.oliveDark, Math.sin(a) * 1.48, 0.2, Math.cos(a) * 1.48, 0, a, 0);
-      addCyl(root, 0.22, 0.26, 0.12, 8, mats.steel, Math.sin(a) * 1.85, 0.06, Math.cos(a) * 1.85);
+      batcher.add('root', 'concreteDark', stabArmGeo, Math.sin(a) * 1.32, 0.18, Math.cos(a) * 1.32, 0, a, 0);
+      batcher.add('root', 'concreteDark', stabPadGeo, Math.sin(a) * 1.56, 0.06, Math.cos(a) * 1.56);
     }
   }
 
   const turretPivot = new THREE.Group();
-  turretPivot.position.set(0, 0.38, 0);
+  turretPivot.position.set(0, 0.37, 0);
   root.add(turretPivot);
   rig.turretPivot = turretPivot;
 
-  const deckMat = level === 3 ? mats.desertArmor : mats.navalGray;
-  const domeMat = level === 3 ? mats.desertArmor : mats.navalWhite;
+  // Smooth 20-seg turntable & beveled elevation cradles in satin navalGray
+  batcher.add('turret', 'navalGray', getChamferedCylinderGeo(0.84, 0.94, 0.28, 20, 0.04), 0, 0.14, 0);
+  batcher.add('turret', 'navalGray', getChamferedBoxGeo(0.24, 0.96, 0.68, 0.04), -0.58, 0.68, 0);
+  batcher.add('turret', 'navalGray', getChamferedBoxGeo(0.24, 0.96, 0.68, 0.04), 0.58, 0.68, 0);
 
-  addCyl(turretPivot, 0.84, 0.94, 0.28, 16, deckMat, 0, 0.14, 0);
-  addBox(turretPivot, 0.24, 0.96, 0.68, deckMat, -0.58, 0.68, 0);
-  addBox(turretPivot, 0.24, 0.96, 0.68, deckMat, 0.58, 0.68, 0);
-  addCyl(turretPivot, 0.44, 0.44, 0.56, 16, level === 3 ? mats.oliveDark : mats.navalWhite, 0, 0.54, 0.04, 0, 0, Math.PI / 2);
+  // Lower 20mm ammo drum(s) + 5A macro armored bustle & twin external lateral rotary ammo drums
+  if (specA) {
+    batcher.add('turret', 'navalGray', getChamferedBoxGeo(0.96, 0.72, 0.56, 0.04), 0, 0.76, -0.56);
+    batcher.add('turret', 'navalGray', getChamferedBoxGeo(1.02, 0.12, 0.58, 0.02), 0, 1.06, -0.56);
+    const twinDrumGeo = getChamferedCylinderGeo(0.27, 0.27, 0.56, 10, 0.035);
+    for (const sx of [-0.88, 0.88]) {
+      batcher.add('turret', 'navalGray', twinDrumGeo, sx, 0.74, -0.02, 0, 0, Math.PI / 2);
+    }
+    batcher.add(
+      'turret',
+      'navalGray',
+      getChamferedCylinderGeo(0.34, 0.34, 0.52, 10, 0.03),
+      0,
+      0.52,
+      0.04,
+      0,
+      0,
+      Math.PI / 2
+    );
+  } else {
+    batcher.add(
+      'turret',
+      'navalGray',
+      getChamferedCylinderGeo(0.42, 0.42, 0.56, 12, 0.035),
+      0,
+      0.54,
+      0.04,
+      0,
+      0,
+      Math.PI / 2
+    );
+  }
 
+  // Smooth 24-seg R2-D2 beveled radome in satin dielectric navalWhite
   const domeScale = level >= 2 ? 1.08 : 1.0;
-  const domeGeo = createLatheYGeo([
-    [0.01, 0.0],
-    [0.44 * domeScale, 0.0],
-    [0.46 * domeScale, 0.72 * domeScale],
-    [0.41 * domeScale, 0.96 * domeScale],
-    [0.24 * domeScale, 1.15 * domeScale],
-    [0.01, 1.22 * domeScale]
-  ]);
-  const radome = new THREE.Mesh(domeGeo, domeMat);
-  radome.position.set(0, 0.96, -0.02);
-  turretPivot.add(radome);
-  addCyl(turretPivot, 0.465 * domeScale, 0.465 * domeScale, 0.09, 20, mats.steel, 0, 1.62, -0.02);
+  const domeGeo = createLatheYGeo(
+    [
+      [0.01, 0.0],
+      [0.44 * domeScale, 0.0],
+      [0.46 * domeScale, 0.72 * domeScale],
+      [0.36 * domeScale, 1.04 * domeScale],
+      [0.01, 1.22 * domeScale]
+    ],
+    24
+  );
+  batcher.add('turret', 'navalWhite', domeGeo, 0, 0.96, -0.02);
 
+  // Smooth 24-seg metallic radome seam rings (batched into navalGray -> zero steel draw call!)
+  const seamRingTop = getGeo(
+    `phalanx_seam_top_v2:${domeScale.toFixed(2)}`,
+    () => new THREE.TorusGeometry(0.456 * domeScale, 0.024, 3, 24)
+  );
+  const seamRingBot = getGeo(
+    `phalanx_seam_bot_v2:${domeScale.toFixed(2)}`,
+    () => new THREE.TorusGeometry(0.458 * domeScale, 0.022, 3, 24)
+  );
+  batcher.add('turret', 'navalGray', seamRingTop, 0, 1.56, -0.02, Math.PI / 2, 0, 0);
+  batcher.add('turret', 'navalGray', seamRingBot, 0, 1.12, -0.02, Math.PI / 2, 0, 0);
+
+  // Unified sensor optic key per variant (zero extra emissive material batches)
+  const opticMat: StructuralMatKey = specB ? 'specTrimB' : 'specTrimA';
+
+  // Lv2+ right FLIR optical module
   if (level >= 2) {
-    addBox(turretPivot, 0.34, 0.16, 0.24, mats.steel, 0.62, 1.05, 0.22);
-    addBox(turretPivot, 0.26, 0.38, 0.36, domeMat, 0.74, 1.22, 0.28);
-    addCyl(turretPivot, 0.09, 0.09, 0.06, 12, mats.opticGreen, 0.74, 1.24, 0.47, Math.PI / 2, 0, 0);
+    batcher.add('turret', 'navalGray', getChamferedBoxGeo(0.32, 0.14, 0.24, 0.02), 0.62, 1.05, 0.22);
+    batcher.add('turret', 'navalWhite', getChamferedBoxGeo(0.26, 0.38, 0.36, 0.03), 0.74, 1.22, 0.28);
+    batcher.add(
+      'turret',
+      opticMat,
+      getChamferedCylinderGeo(0.085, 0.085, 0.06, 8, 0.01),
+      0.74,
+      1.24,
+      0.47,
+      Math.PI / 2,
+      0,
+      0
+    );
+  }
+
+  // Lv3+ left tracking radar pod
+  if (level >= 3) {
+    batcher.add('turret', 'navalGray', getChamferedBoxGeo(0.34, 0.44, 0.62, 0.03), -0.78, 1.15, 0.15);
+    batcher.add(
+      'turret',
+      'navalGray',
+      getChamferedCylinderGeo(0.14, 0.16, 0.34, 8, 0.02),
+      -0.78,
+      1.15,
+      0.54,
+      Math.PI / 2,
+      0,
+      0
+    );
+    batcher.add(
+      'turret',
+      opticMat,
+      getChamferedCylinderGeo(0.09, 0.09, 0.05, 8, 0.01),
+      -0.78,
+      1.15,
+      0.72,
+      Math.PI / 2,
+      0,
+      0
+    );
+  }
+
+  const pivots: Record<string, THREE.Object3D> = { root, turret: turretPivot };
+
+  // Macro 5A vs 6B silhouette differentiation (legible at 90-140u)
+  if (specA) {
+    // 5A: Wide dual-lens dorsal E/O sensor hood
+    batcher.add('turret', 'navalWhite', getChamferedBoxGeo(0.68, 0.28, 0.52, 0.04), 0, 2.28, 0.04);
+    for (const lx of [-0.17, 0.17]) {
+      batcher.add(
+        'turret',
+        'specTrimA',
+        getChamferedCylinderGeo(0.09, 0.09, 0.06, 8, 0.01),
+        lx,
+        2.29,
+        0.31,
+        Math.PI / 2,
+        0,
+        0
+      );
+    }
+  } else if (specB) {
+    // 6B: Tall rotating Doppler radar T-bar atop radome + 2 winged lateral proximity micro-missile pods
+    const dopplerPivot = new THREE.Group();
+    dopplerPivot.position.set(0, 2.24, -0.02);
+    turretPivot.add(dopplerPivot);
+    rig.radarPivots = [dopplerPivot];
+    pivots.radar_0 = dopplerPivot;
+
+    batcher.add('radar_0', 'navalWhite', getChamferedCylinderGeo(0.075, 0.095, 0.32, 8, 0.015), 0, 0.16, 0);
+    batcher.add('radar_0', 'navalWhite', getChamferedBoxGeo(1.42, 0.22, 0.18, 0.03), 0, 0.36, 0);
+
+    for (const sx of [-1, 1]) {
+      // Wing pylon + sleek lateral proximity pod on shoulder
+      batcher.add(
+        'turret',
+        'navalGray',
+        getChamferedBoxGeo(0.54, 0.1, 0.38, 0.02),
+        sx * 0.68,
+        1.52,
+        0.04,
+        0,
+        0,
+        sx * 0.22
+      );
+      batcher.add('turret', 'navalWhite', getChamferedBoxGeo(0.32, 0.36, 0.78, 0.04), sx * 0.98, 1.6, 0.08);
+      batcher.add('turret', 'specTrimB', getChamferedBoxGeo(0.22, 0.24, 0.12, 0.02), sx * 0.98, 1.6, 0.5);
+    }
   }
 
   const barrelPivot = new THREE.Group();
@@ -1255,101 +1722,241 @@ function buildPhalanx(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, 
   turretPivot.add(barrelPivot);
   rig.barrelPivot = barrelPivot;
 
-  addBox(barrelPivot, 0.42, 0.38, 0.56, mats.gunmetal, 0, 0, 0.06);
-
   const gatlingPivot = new THREE.Group();
-  gatlingPivot.position.set(0, 0, 0.3);
+  gatlingPivot.position.set(0, 0, 0.22);
   barrelPivot.add(gatlingPivot);
   rig.gatlingPivot = gatlingPivot;
+  pivots.gatling = gatlingPivot;
 
-  const bLen = level >= 2 ? 1.48 : 1.25;
-  const bRad = level >= 2 ? 0.026 : 0.021;
+  // Cylindrical rotary breech + 6 gatling barrels + chamfered cooling clamps (always 1 gunmetal mesh)
+  batcher.add(
+    'gatling',
+    'gunmetal',
+    getChamferedCylinderGeo(0.21, 0.23, 0.48, 10, 0.025),
+    0,
+    0,
+    -0.06,
+    Math.PI / 2,
+    0,
+    0
+  );
+
+  const bLen = specB ? 1.88 : level >= 2 ? 1.5 : 1.28;
+  const bRad = specA ? 0.034 : level >= 2 ? 0.026 : 0.022;
   const ringR = level >= 2 ? 0.115 : 0.095;
+  const barrelRodGeo = getGeo(
+    `phalanx_rod:${bRad.toFixed(4)}:${bLen.toFixed(4)}`,
+    () => new THREE.CylinderGeometry(bRad, bRad, bLen, 6)
+  );
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
-    addCyl(
-      gatlingPivot,
-      bRad,
-      bRad,
-      bLen,
-      6,
-      mats.gunmetal,
+    batcher.add(
+      'gatling',
+      'gunmetal',
+      barrelRodGeo,
       Math.cos(a) * ringR,
       Math.sin(a) * ringR,
-      bLen * 0.5,
+      bLen * 0.5 + 0.1,
       Math.PI / 2,
       0,
       0
     );
   }
-  addCyl(gatlingPivot, ringR + 0.04, ringR + 0.04, 0.07, 14, mats.steel, 0, 0, bLen * 0.45, Math.PI / 2, 0, 0);
-  addCyl(gatlingPivot, ringR + 0.045, ringR + 0.045, 0.09, 14, mats.steel, 0, 0, bLen * 0.92, Math.PI / 2, 0, 0);
+  batcher.add(
+    'gatling',
+    'gunmetal',
+    getChamferedCylinderGeo(ringR + 0.044, ringR + 0.044, 0.08, 8, 0.015),
+    0,
+    0,
+    bLen * 0.45 + 0.1,
+    Math.PI / 2,
+    0,
+    0
+  );
+  batcher.add(
+    'gatling',
+    'gunmetal',
+    getChamferedCylinderGeo(ringR + 0.05, ringR + 0.05, 0.1, 8, 0.018),
+    0,
+    0,
+    bLen * 0.9 + 0.1,
+    Math.PI / 2,
+    0,
+    0
+  );
 
-  if (level >= 3) {
-    addBox(turretPivot, 0.34, 0.44, 0.62, mats.darkSteel, -0.78, 1.15, 0.15);
-    addCyl(turretPivot, 0.14, 0.16, 0.36, 12, mats.steel, -0.78, 1.15, 0.55, Math.PI / 2, 0, 0);
-    addCyl(turretPivot, 0.1, 0.1, 0.06, 12, mats.radarCyan, -0.78, 1.15, 0.74, Math.PI / 2, 0, 0);
+  if (specA) {
+    // 5A thick heavy flak muzzle suppressor & barrel shroud
+    batcher.add(
+      'gatling',
+      'gunmetal',
+      getChamferedCylinderGeo(ringR + 0.09, ringR + 0.095, 0.5, 10, 0.025),
+      0,
+      0,
+      bLen * 0.78 + 0.1,
+      Math.PI / 2,
+      0,
+      0
+    );
+  } else if (specB) {
+    // 6B prominent proximity-fuze induction muzzle sleeve in gunmetal (zero extra draw call)
+    batcher.add(
+      'gatling',
+      'gunmetal',
+      getChamferedCylinderGeo(ringR + 0.068, ringR + 0.068, 0.18, 10, 0.02),
+      0,
+      0,
+      bLen * 0.8 + 0.1,
+      Math.PI / 2,
+      0,
+      0
+    );
   }
 
+  batcher.flush(pivots, mats);
+
   const muzzlePoint = new THREE.Object3D();
-  muzzlePoint.position.set(0, 0, bLen + 0.34);
+  muzzlePoint.position.set(0, 0, bLen + 0.36);
   barrelPivot.add(muzzlePoint);
   rig.muzzlePoint = muzzlePoint;
-  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, bLen + 0.38, 0.9);
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, bLen + 0.42, 0.9);
 }
 
-function buildHowitzer(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
+function buildHowitzer(
+  root: THREE.Group,
+  rig: TowerRig3D,
+  mats: ModelMaterials,
+  level: number,
+  specialization: 'A' | 'B' | null = null
+) {
+  const batcher = new StaticMeshBatcher('howitzer', level, specialization);
+  const specA = specialization === 'A';
+  const specB = specialization === 'B';
+
+  root.add(createContactShadowMesh(1.92, 0.42));
+
   if (level === 1) {
-    addCyl(root, 1.66, 1.8, 0.16, 12, mats.concreteDark, 0, 0.08, 0);
-    addSandbagRing(root, 1.54, 10, mats.sandbag, 0.2, 1);
+    batcher.add('root', 'concreteDark', getChamferedCylinderGeo(1.66, 1.76, 0.16, 8, 0.03), 0, 0.08, 0);
+    batcher.add('root', 'concreteDark', getChamferedCylinderGeo(1.06, 1.16, 0.08, 12, 0.02), 0, 0.18, 0);
+
+    const bagGeo = getRoundedBoxGeo(0.54, 0.22, 0.32, 0.06, 1);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      batcher.add(
+        'root',
+        'sandbag',
+        bagGeo,
+        Math.sin(a) * 1.48,
+        0.22,
+        Math.cos(a) * 1.48,
+        0,
+        a,
+        (i % 2 === 0 ? 1 : -1) * 0.035
+      );
+    }
+    for (let i = 0; i < 4; i++) {
+      const a = -0.66 + i * 0.44;
+      batcher.add('root', 'sandbag', bagGeo, Math.sin(a) * 1.46, 0.41, Math.cos(a) * 1.46, 0, a, 0.02);
+    }
 
     const turretPivot = new THREE.Group();
     turretPivot.position.set(0, 0.2, 0);
     root.add(turretPivot);
     rig.turretPivot = turretPivot;
 
-    for (const [ang, len] of [[-0.55, 1.4], [0.55, 1.4], [-2.5, 1.05], [2.5, 1.05]]) {
-      addBox(
-        turretPivot,
-        0.16,
-        0.14,
-        len,
-        mats.oliveDark,
-        Math.sin(ang) * (len * 0.58),
-        0.22,
-        -Math.cos(ang) * (len * 0.58),
+    for (const [ang, len] of [
+      [-0.55, 1.32],
+      [0.55, 1.32],
+      [-2.5, 1.02],
+      [2.5, 1.02]
+    ]) {
+      batcher.add(
+        'turret',
+        'oliveDark',
+        getChamferedBoxGeo(0.16, 0.14, len, 0.025),
+        Math.sin(ang) * (len * 0.56),
+        0.2,
+        -Math.cos(ang) * (len * 0.56),
         0,
         -ang,
         0
       );
-      addBox(turretPivot, 0.36, 0.22, 0.22, mats.gunmetal, Math.sin(ang) * (len * 1.12), 0.12, -Math.cos(ang) * (len * 1.12), 0, -ang, 0);
+      batcher.add(
+        'turret',
+        'oliveDark',
+        getChamferedBoxGeo(0.34, 0.22, 0.22, 0.03),
+        Math.sin(ang) * (len * 1.1),
+        0.12,
+        -Math.cos(ang) * (len * 1.1),
+        0,
+        -ang,
+        0
+      );
     }
 
-    addCyl(turretPivot, 0.54, 0.62, 0.32, 8, mats.olive, 0, 0.28, 0);
-    addBox(turretPivot, 0.18, 0.62, 0.45, mats.oliveDark, -0.34, 0.66, 0.04);
-    addBox(turretPivot, 0.18, 0.62, 0.45, mats.oliveDark, 0.34, 0.66, 0.04);
-    addBox(turretPivot, 1.1, 0.68, 0.1, mats.olive, 0, 0.72, 0.36, -0.25, 0, 0);
+    batcher.add('turret', 'olive', getChamferedCylinderGeo(0.54, 0.62, 0.3, 8, 0.04), 0, 0.24, 0);
+    batcher.add('turret', 'olive', getChamferedBoxGeo(0.18, 0.6, 0.46, 0.025), -0.34, 0.62, 0.04);
+    batcher.add('turret', 'olive', getChamferedBoxGeo(0.18, 0.6, 0.46, 0.025), 0.34, 0.62, 0.04);
+    batcher.add('turret', 'olive', getChamferedBoxGeo(0.46, 0.66, 0.09, 0.02), 0, 0.68, 0.36, -0.24, 0, 0);
+    batcher.add('turret', 'olive', getChamferedBoxGeo(0.4, 0.62, 0.09, 0.02), -0.38, 0.67, 0.3, -0.24, -0.22, 0);
+    batcher.add('turret', 'olive', getChamferedBoxGeo(0.4, 0.62, 0.09, 0.02), 0.38, 0.67, 0.3, -0.24, 0.22, 0);
 
     const barrelPivot = new THREE.Group();
-    barrelPivot.position.set(0, 0.78, 0.12);
+    barrelPivot.position.set(0, 0.74, 0.12);
     barrelPivot.rotation.x = -0.68;
     turretPivot.add(barrelPivot);
     rig.barrelPivot = barrelPivot;
 
-    addBox(barrelPivot, 0.38, 0.36, 0.82, mats.darkSteel, 0, 0, -0.2);
-    addCyl(barrelPivot, 0.075, 0.075, 0.95, 10, mats.steel, -0.16, 0.14, 0.25, Math.PI / 2, 0, 0);
-    addCyl(barrelPivot, 0.075, 0.075, 0.95, 10, mats.steel, 0.16, 0.14, 0.25, Math.PI / 2, 0, 0);
+    batcher.add('barrel', 'gunmetal', getRoundedBoxGeo(0.38, 0.36, 0.82, 0.04, 1), 0, 0, -0.2);
+    batcher.add(
+      'barrel',
+      'gunmetal',
+      getChamferedCylinderGeo(0.075, 0.075, 0.94, 10, 0.015),
+      -0.16,
+      0.14,
+      0.25,
+      Math.PI / 2,
+      0,
+      0
+    );
+    batcher.add(
+      'barrel',
+      'gunmetal',
+      getChamferedCylinderGeo(0.075, 0.075, 0.94, 10, 0.015),
+      0.16,
+      0.14,
+      0.25,
+      Math.PI / 2,
+      0,
+      0
+    );
+    batcher.add(
+      'barrel',
+      'gunmetal',
+      getChamferedCylinderGeo(0.175, 0.175, 0.22, 10, 0.02),
+      0,
+      0,
+      1.05,
+      Math.PI / 2,
+      0,
+      0
+    );
 
-    const m777BarrelGeo = createLatheAlongZGeo([
-      [0.145, 0.15],
-      [0.145, 0.95],
-      [0.105, 0.98],
-      [0.105, 2.38],
-      [0.175, 2.42],
-      [0.175, 2.66],
-      [0.08, 2.7]
-    ]);
-    barrelPivot.add(new THREE.Mesh(m777BarrelGeo, mats.gunmetal));
+    const m777BarrelGeo = createLatheAlongZGeo(
+      [
+        [0.145, 0.15],
+        [0.145, 0.95],
+        [0.105, 0.98],
+        [0.105, 2.38],
+        [0.178, 2.42],
+        [0.178, 2.66],
+        [0.08, 2.7]
+      ],
+      12
+    );
+    batcher.add('barrel', 'gunmetal', m777BarrelGeo);
+
+    batcher.flush({ root, turret: turretPivot, barrel: barrelPivot }, mats);
 
     const muzzlePoint = new THREE.Object3D();
     muzzlePoint.position.set(0, 0, 2.74);
@@ -1357,16 +1964,22 @@ function buildHowitzer(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials,
     rig.muzzlePoint = muzzlePoint;
     rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 2.85, 1.65);
   } else if (level === 2) {
-    addBox(root, 2.45, 0.22, 3.05, mats.concreteDark, 0, 0.11, 0);
-    for (const sx of [-1.04, 1.04]) {
-      addBox(root, 0.48, 0.44, 2.95, mats.tracks, sx, 0.34, 0);
-      for (let w = 0; w < 5; w++) {
-        addCyl(root, 0.2, 0.2, 0.5, 10, mats.steel, sx, 0.26, 1.0 - w * 0.5, 0, 0, Math.PI / 2);
+    // Compact chamfered slab (corners <= 1.63u for ownerRingMesh clearance)
+    batcher.add('root', 'concreteDark', getCutCornerSlabGeo(2.48, 0.18, 2.92, 0.52, 0.03), 0, 0.03, 0);
+
+    const trackGeo = getRoundedBoxGeo(0.42, 0.42, 2.6, 0.11, 1);
+    const roadWheelGeo = getChamferedCylinderGeo(0.18, 0.18, 0.45, 8, 0.025);
+    for (const sx of [-0.96, 0.96]) {
+      batcher.add('root', 'tracks', trackGeo, sx, 0.33, 0);
+      for (let w = 0; w < 6; w++) {
+        batcher.add('root', 'tracks', roadWheelGeo, sx, 0.23, 1.0 - w * 0.4, 0, 0, Math.PI / 2);
       }
     }
-    addBox(root, 1.72, 0.44, 2.72, mats.desertArmor, 0, 0.46, 0);
-    for (const sx of [-0.68, 0.68]) {
-      addBox(root, 0.28, 0.24, 0.42, mats.gunmetal, sx, 0.22, -1.52);
+
+    batcher.add('root', 'desertArmor', getRoundedBoxGeo(1.66, 0.44, 2.52, 0.06, 2), 0, 0.46, 0);
+    batcher.add('root', 'desertArmor', getChamferedBoxGeo(1.54, 0.22, 0.52, 0.03), 0, 0.54, 1.18, 0.28, 0, 0);
+    for (const sx of [-0.62, 0.62]) {
+      batcher.add('root', 'desertArmor', getChamferedBoxGeo(0.26, 0.22, 0.36, 0.03), sx, 0.22, -1.34);
     }
 
     const turretPivot = new THREE.Group();
@@ -1376,20 +1989,26 @@ function buildHowitzer(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials,
 
     const paladinTurretGeo = createSideExtrudeGeo(
       [
-        [-1.38, 0.0],
+        [-1.32, 0.0],
         [0.82, 0.0],
         [0.98, 0.38],
         [0.54, 0.94],
-        [-1.28, 0.94],
-        [-1.44, 0.46]
+        [-1.24, 0.94],
+        [-1.38, 0.46]
       ],
-      1.88,
+      1.84,
       0.05,
       0.05
     );
-    turretPivot.add(new THREE.Mesh(paladinTurretGeo, mats.desertArmor));
+    batcher.add('turret', 'desertArmor', paladinTurretGeo);
+    batcher.add('turret', 'desertArmor', getChamferedCylinderGeo(0.3, 0.34, 0.18, 10, 0.03), -0.46, 1.02, 0.16);
+    for (const sx of [-0.96, 0.96]) {
+      batcher.add('turret', 'desertArmor', getChamferedBoxGeo(0.16, 0.38, 0.92, 0.03), sx, 0.58, -0.35);
+    }
+
+    const shellGeo = getChamferedCylinderGeo(0.058, 0.058, 0.42, 8, 0.012);
     for (let i = -2; i <= 2; i++) {
-      addCyl(turretPivot, 0.06, 0.06, 0.42, 8, mats.brass, i * 0.22, 1.02, -1.05, Math.PI / 2, 0, 0);
+      batcher.add('turret', 'brass', shellGeo, i * 0.22, 1.02, -1.02, Math.PI / 2, 0, 0);
     }
 
     const barrelPivot = new THREE.Group();
@@ -1398,21 +2017,26 @@ function buildHowitzer(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials,
     turretPivot.add(barrelPivot);
     rig.barrelPivot = barrelPivot;
 
-    addBox(barrelPivot, 0.5, 0.42, 0.54, mats.desertArmor, 0, 0, 0.14);
-    const l39Geo = createLatheAlongZGeo([
-      [0.16, 0.2],
-      [0.16, 0.72],
-      [0.11, 0.75],
-      [0.11, 1.32],
-      [0.155, 1.38],
-      [0.155, 1.72],
-      [0.105, 1.78],
-      [0.105, 2.55],
-      [0.18, 2.6],
-      [0.18, 2.86],
-      [0.085, 2.9]
-    ]);
-    barrelPivot.add(new THREE.Mesh(l39Geo, mats.gunmetal));
+    batcher.add('barrel', 'gunmetal', getRoundedBoxGeo(0.5, 0.42, 0.54, 0.05, 1), 0, 0, 0.14);
+    const l39Geo = createLatheAlongZGeo(
+      [
+        [0.16, 0.2],
+        [0.16, 0.72],
+        [0.11, 0.75],
+        [0.11, 1.32],
+        [0.158, 1.38],
+        [0.158, 1.72],
+        [0.105, 1.78],
+        [0.105, 2.55],
+        [0.182, 2.6],
+        [0.182, 2.86],
+        [0.085, 2.9]
+      ],
+      12
+    );
+    batcher.add('barrel', 'gunmetal', l39Geo);
+
+    batcher.flush({ root, turret: turretPivot, barrel: barrelPivot }, mats);
 
     const muzzlePoint = new THREE.Object3D();
     muzzlePoint.position.set(0, 0, 2.94);
@@ -1420,78 +2044,142 @@ function buildHowitzer(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials,
     rig.muzzlePoint = muzzlePoint;
     rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 3.05, 1.8);
   } else {
-    addBox(root, 2.8, 0.14, 3.65, mats.concreteDark, 0, 0.07, 0);
+    // Compact chamfered pad 2.64x3.26 (corner <= 1.74u) & chassis/wheels inside [-1.18..+1.04]
+    batcher.add('root', 'concreteDark', getCutCornerSlabGeo(2.64, 0.14, 3.26, 0.72, 0.03), 0, 0.03, 0);
+
     const turretPivot = new THREE.Group();
     turretPivot.position.set(0, 0.14, 0);
     root.add(turretPivot);
     rig.turretPivot = turretPivot;
 
-    addBox(turretPivot, 1.36, 0.34, 3.2, mats.darkSteel, 0, 0.52, -0.05);
-    for (const wz of [1.08, -0.45, -1.25]) {
-      addMilitaryWheel(turretPivot, mats, -0.84, 0.36, wz, 0.32, mats.desertArmor);
-      addMilitaryWheel(turretPivot, mats, 0.84, 0.36, wz, 0.32, mats.desertArmor);
+    batcher.add('turret', 'darkSteel', getChamferedBoxGeo(1.24, 0.32, 2.54, 0.04), 0, 0.5, -0.06);
+    const tireGeo = getChamferedCylinderGeo(0.33, 0.33, 0.28, 10, 0.045);
+    const hubGeo = getChamferedCylinderGeo(0.16, 0.16, 0.32, 8, 0.02);
+    for (const wz of [1.0, -0.36, -1.12]) {
+      batcher.add('turret', 'tire', tireGeo, -0.76, 0.33, wz, 0, 0, Math.PI / 2);
+      batcher.add('turret', 'tire', tireGeo, 0.76, 0.33, wz, 0, 0, Math.PI / 2);
+      batcher.add('turret', 'desertArmor', hubGeo, -0.76, 0.33, wz, 0, 0, Math.PI / 2);
+      batcher.add('turret', 'desertArmor', hubGeo, 0.76, 0.33, wz, 0, 0, Math.PI / 2);
     }
 
     const cabGeo = createSideExtrudeGeo(
       [
-        [0.54, 0.62],
-        [1.56, 0.62],
-        [1.62, 1.15],
-        [1.36, 1.66],
-        [0.54, 1.66]
+        [0.44, 0.58],
+        [1.36, 0.58],
+        [1.42, 1.08],
+        [1.18, 1.56],
+        [0.44, 1.56]
       ],
-      1.66,
+      1.5,
       0.04,
       0.04
     );
-    turretPivot.add(new THREE.Mesh(cabGeo, mats.desertArmor));
-    addBox(turretPivot, 1.36, 0.36, 0.08, mats.glass, 0, 1.34, 1.56, -0.35, 0, 0);
-    addBox(turretPivot, 1.72, 0.1, 1.9, mats.diamondPlate, 0, 0.72, -0.62);
+    batcher.add('turret', 'desertArmor', cabGeo);
+    batcher.add('turret', 'desertArmor', getChamferedBoxGeo(1.56, 0.12, 1.72, 0.03), 0, 0.68, -0.58);
+    batcher.add('turret', 'darkSteel', getChamferedBoxGeo(1.24, 0.32, 0.09, 0.02), 0, 1.26, 1.36, -0.35, 0, 0);
+    batcher.add('turret', 'darkSteel', getChamferedBoxGeo(1.52, 0.16, 0.14, 0.025), 0, 0.54, 1.44);
 
     const barrelPivot = new THREE.Group();
-    barrelPivot.position.set(0, 1.05, -0.78);
+    barrelPivot.position.set(0, 1.0, -0.68);
     barrelPivot.rotation.x = -0.76;
     turretPivot.add(barrelPivot);
     rig.barrelPivot = barrelPivot;
-    rig.missileCaps = [];
 
-    addBox(barrelPivot, 1.24, 0.86, 1.92, mats.oliveDark, 0, 0.4, 0.2);
-    for (const rx of [-0.36, 0, 0.36]) {
-      for (const ry of [0.22, 0.58]) {
-        addCyl(barrelPivot, 0.14, 0.14, 1.98, 10, mats.gunmetal, rx, ry, 0.22, Math.PI / 2, 0, 0);
-        const cap = addMissileCap(barrelPivot, mats, 0.115, rx, ry, 1.22, mats.navalWhite);
-        rig.missileCaps.push(cap);
+    batcher.add('barrel', 'oliveDark', getChamferedBoxGeo(1.22, 0.84, 1.84, 0.045), 0, 0.4, 0.16);
+    const tubeGeo = getChamferedCylinderGeo(0.135, 0.135, 1.88, 8, 0.015);
+    const capPositions: [number, number, number][] = [];
+    for (const rx of [-0.35, 0, 0.35]) {
+      for (const ry of [0.22, 0.56]) {
+        batcher.add('barrel', 'oliveDark', tubeGeo, rx, ry, 0.18, Math.PI / 2, 0, 0);
+        capPositions.push([rx, ry, 1.12]);
       }
     }
 
+    const batchedCaps = createBatchedMissileCapsMesh(
+      `howitzer:${level}:${specialization ?? 'none'}:barrel_missileCaps`,
+      capPositions,
+      0.11,
+      mats.navalWhite,
+      1.0,
+      12
+    );
+    barrelPivot.add(batchedCaps);
+    rig.missileCaps = [batchedCaps];
+
+    if (specA) {
+      // 5A: Thermobaric pressurized flank tanks + steel straps + thermal deflector shield + subtle amber bands
+      batcher.add('turret', 'desertArmor', getChamferedBoxGeo(1.56, 0.48, 0.1, 0.025), 0, 1.0, 0.34);
+      const tankGeo = getChamferedCylinderGeo(0.17, 0.17, 1.12, 10, 0.035);
+      const strapGeo = getChamferedBoxGeo(0.38, 0.36, 0.08, 0.015);
+      for (const sx of [-0.78, 0.78]) {
+        batcher.add('turret', 'darkSteel', tankGeo, sx, 0.9, -0.58, Math.PI / 2, 0, 0);
+        batcher.add('turret', 'desertArmor', strapGeo, sx, 0.9, -0.3);
+        batcher.add('turret', 'desertArmor', strapGeo, sx, 0.9, -0.86);
+        batcher.add(
+          'turret',
+          'specTrimB',
+          getChamferedCylinderGeo(0.18, 0.18, 0.07, 10, 0.01),
+          sx,
+          0.9,
+          -0.06,
+          Math.PI / 2,
+          0,
+          0
+        );
+      }
+    } else if (specB) {
+      // 6B: Dual lateral cluster sub-munition pods + fuse antenna + telemetry dome
+      batcher.add('turret', 'darkSteel', getChamferedCylinderGeo(0.17, 0.21, 0.2, 10, 0.03), 0.34, 1.66, 0.88);
+      batcher.add('turret', 'darkSteel', getChamferedCylinderGeo(0.025, 0.035, 0.78, 6, 0.005), -0.52, 1.94, 0.72);
+      batcher.add('turret', 'specTrimA', getChamferedCylinderGeo(0.1, 0.12, 0.08, 10, 0.015), 0.34, 1.78, 0.88);
+      for (const sx of [-0.8, 0.8]) {
+        batcher.add('barrel', 'oliveDark', getChamferedBoxGeo(0.36, 0.52, 1.48, 0.04), sx, 0.4, 0.12);
+        batcher.add('barrel', 'oliveDark', getChamferedBoxGeo(0.32, 0.44, 0.12, 0.02), sx, 0.4, 0.88);
+      }
+    }
+
+    batcher.flush({ root, turret: turretPivot, barrel: barrelPivot }, mats);
+
     const muzzlePoint = new THREE.Object3D();
-    muzzlePoint.position.set(0, 0.4, 1.32);
+    muzzlePoint.position.set(0, 0.4, 1.24);
     barrelPivot.add(muzzlePoint);
     rig.muzzlePoint = muzzlePoint;
-    rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0.4, 1.4, 1.7);
+    rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0.4, 1.32, 1.7);
   }
 }
 
-function buildPatriot(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
-  addBox(root, 3.25, 0.2, 3.25, mats.concreteDark, 0, 0.1, 0);
-  addBox(root, 2.65, 0.12, 2.65, mats.diamondPlate, 0, 0.26, 0);
+function buildPatriot(
+  root: THREE.Group,
+  rig: TowerRig3D,
+  mats: ModelMaterials,
+  level: number,
+  specialization: 'A' | 'B' | null = null
+) {
+  const batcher = new StaticMeshBatcher('patriot', level, specialization);
+  const specA = specialization === 'A';
+  const specB = specialization === 'B';
 
+  root.add(createContactShadowMesh(1.94, 0.44));
+
+  // Chamfered octagonal base (r <= 1.78u) + outriggers ending strictly <= 1.76u for ownerRingMesh clearance
+  batcher.add('root', 'concreteDark', getChamferedCylinderGeo(1.7, 1.78, 0.2, 8, 0.04), 0, 0.1, 0);
+  batcher.add('root', 'diamondPlate', getChamferedCylinderGeo(1.42, 1.48, 0.12, 8, 0.03), 0, 0.26, 0);
+
+  const outriggerArm = getChamferedBoxGeo(0.24, 0.18, 0.72, 0.03);
+  const outriggerPad = getChamferedCylinderGeo(0.18, 0.2, 0.12, 8, 0.025);
   for (const ang of [0.78, 2.35, 3.92, 5.49]) {
-    addBox(root, 0.26, 0.2, 1.02, mats.oliveDark, Math.sin(ang) * 1.38, 0.2, Math.cos(ang) * 1.38, 0, ang, 0);
-    addCyl(root, 0.22, 0.26, 0.12, 8, mats.steel, Math.sin(ang) * 1.76, 0.06, Math.cos(ang) * 1.76);
+    batcher.add('root', 'concreteDark', outriggerArm, Math.sin(ang) * 1.24, 0.18, Math.cos(ang) * 1.24, 0, ang, 0);
+    batcher.add('root', 'concreteDark', outriggerPad, Math.sin(ang) * 1.56, 0.06, Math.cos(ang) * 1.56);
   }
-
-  addBox(root, 0.72, 0.56, 0.54, mats.oliveDark, 0, 0.58, -1.16);
-  addBox(root, 0.22, 0.18, 0.08, mats.amberGlow, 0, 0.66, -1.44);
 
   const turretPivot = new THREE.Group();
   turretPivot.position.set(0, 0.34, 0);
   root.add(turretPivot);
   rig.turretPivot = turretPivot;
-  rig.missileCaps = [];
 
-  addCyl(turretPivot, 0.88, 0.96, 0.28, 12, mats.steel, 0, 0.14, 0);
-  addBox(turretPivot, 1.38, 0.3, 1.66, mats.desertArmor, 0, 0.42, 0);
+  batcher.add('turret', 'desertArmor', getChamferedCylinderGeo(0.88, 0.96, 0.28, 12, 0.04), 0, 0.14, 0);
+  batcher.add('turret', 'desertArmor', getChamferedBoxGeo(1.42, 0.3, 1.66, 0.04), 0, 0.42, 0);
+  batcher.add('turret', 'desertArmor', getChamferedBoxGeo(0.76, 0.5, 0.48, 0.04), 0, 0.56, -1.04);
 
   const rackGroup = new THREE.Group();
   rackGroup.position.set(0, 0.82, -0.08);
@@ -1505,39 +2193,93 @@ function buildPatriot(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, 
   const startX = -((cols - 1) * cellSpX) * 0.5;
   const startY = 0.18;
 
+  const canisterGeo = getChamferedBoxGeo(0.38, 0.38, 2.28, 0.035);
+  const collarGeo = getChamferedBoxGeo(0.41, 0.41, 0.16, 0.025);
+  const warheadLenScale = specA ? 1.65 : 1.0;
+
+  const capPositions: [number, number, number][] = [];
   for (let c = 0; c < cols; c++) {
     for (let r = 0; r < rows; r++) {
       const tx = startX + c * cellSpX;
       const ty = startY + r * cellSpY;
-      addBox(rackGroup, 0.38, 0.38, 2.28, mats.olive, tx, ty, 0.15);
-      addBox(rackGroup, 0.4, 0.4, 0.14, mats.darkSteel, tx, ty, 1.26);
-      const cap = addMissileCap(rackGroup, mats, 0.125, tx, ty, 1.24, level === 3 ? mats.radarCyan : mats.navalWhite);
-      rig.missileCaps.push(cap);
+      batcher.add('rack', 'olive', canisterGeo, tx, ty, 0.15);
+      batcher.add('rack', 'darkSteel', collarGeo, tx, ty, 1.24);
+      capPositions.push([tx, ty, 1.24]);
     }
   }
 
+  // Batched 14-seg missileCaps mesh (noShadow = true -> 1 draw call instead of 8..24!)
+  const batchedCaps = createBatchedMissileCapsMesh(
+    `patriot:${level}:${specialization ?? 'none'}:rack_missileCaps`,
+    capPositions,
+    0.125,
+    mats.navalWhite,
+    warheadLenScale,
+    14
+  );
+  rackGroup.add(batchedCaps);
+  rig.missileCaps = [batchedCaps];
+
+  // 6B: Dual flank micro-missile swarm pods + reinforced gantry portal arch
+  if (specB) {
+    const podGeo = getChamferedBoxGeo(0.44, 0.68, 1.62, 0.045);
+    const microCapGeo = getChamferedBoxGeo(0.36, 0.58, 0.12, 0.02);
+    for (const sx of [-1.14, 1.14]) {
+      batcher.add('rack', 'olive', podGeo, sx, 0.52, 0.12);
+      batcher.add('rack', 'darkSteel', microCapGeo, sx, 0.52, 0.94);
+    }
+    batcher.add('rack', 'darkSteel', getChamferedBoxGeo(0.14, 1.25, 0.22, 0.02), -0.94, 0.62, 0.45);
+    batcher.add('rack', 'darkSteel', getChamferedBoxGeo(0.14, 1.25, 0.22, 0.02), 0.94, 0.62, 0.45);
+    batcher.add('rack', 'darkSteel', getChamferedBoxGeo(2.04, 0.16, 0.24, 0.025), 0, 1.26, 0.45);
+  }
+
+  const pivots: Record<string, THREE.Object3D> = {
+    root,
+    turret: turretPivot,
+    rack: rackGroup
+  };
+
   if (level >= 2) {
-    const aesaMat = level === 3 ? mats.radarCyan : mats.copperAesa;
     const radarMount = new THREE.Group();
     radarMount.position.set(0, 1.35, -0.78);
     turretPivot.add(radarMount);
 
-    addBox(radarMount, 1.18, 0.96, 0.24, mats.desertArmor, 0, 0.26, 0, -0.38, 0, 0);
-    const panel = addBox(radarMount, 0.96, 0.78, 0.08, aesaMat, 0, 0.26, 0.14, -0.38, 0, 0);
+    // Enlarged long-range AESA fairing & collar batched inside turret for 5A
+    if (specA) {
+      batcher.add('turret', 'desertArmor', getChamferedBoxGeo(1.48, 1.12, 0.28, 0.045), 0, 1.64, -0.78, -0.38, 0, 0);
+      batcher.add('turret', 'specTrimA', getChamferedBoxGeo(1.2, 0.92, 0.06, 0.02), 0, 1.64, -0.64, -0.38, 0, 0);
+    } else {
+      batcher.add('turret', 'desertArmor', getChamferedBoxGeo(1.18, 0.96, 0.24, 0.04), 0, 1.61, -0.78, -0.38, 0, 0);
+    }
+
+    const panel = new THREE.Mesh(
+      getChamferedBoxGeo(specA ? 1.08 : 0.96, specA ? 0.82 : 0.78, 0.08, 0.02),
+      mats.copperAesa
+    );
+    panel.position.set(0, specA ? 0.29 : 0.26, 0.16);
+    panel.rotation.x = -0.38;
+    panel.userData.noShadow = true;
+    radarMount.add(panel);
     rig.aesaPanel = panel;
 
     if (level === 3) {
       rig.radarPivots = [];
-      for (const sx of [-0.78, 0.78]) {
+      const sides = [-0.78, 0.78];
+      for (let i = 0; i < sides.length; i++) {
+        const sx = sides[i];
         const arm = new THREE.Group();
         arm.position.set(sx, 1.0, -0.72);
-        addCyl(arm, 0.06, 0.08, 0.45, 6, mats.steel, 0, 0.22, 0);
-        addBox(arm, 0.34, 0.22, 0.08, mats.radarCyan, 0, 0.46, 0);
         turretPivot.add(arm);
         rig.radarPivots.push(arm);
+        const rKey = `radar_${i}`;
+        pivots[rKey] = arm;
+        batcher.add(rKey, 'darkSteel', getChamferedCylinderGeo(0.06, 0.08, 0.45, 6, 0.015), 0, 0.22, 0);
+        batcher.add(rKey, 'darkSteel', getChamferedBoxGeo(0.36, 0.24, 0.1, 0.02), 0, 0.46, 0);
       }
     }
   }
+
+  batcher.flush(pivots, mats);
 
   const muzzlePoint = new THREE.Object3D();
   muzzlePoint.position.set(0, 0.55, 1.48);
@@ -1546,99 +2288,203 @@ function buildPatriot(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, 
   rig.muzzleFlashMesh = attachMuzzleFlashMesh(rackGroup, mats, 0, 0.55, 1.56, 1.4, true);
 }
 
-function buildEwCrew(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
-  addCyl(root, 1.54, 1.66, 0.22, 8, mats.concreteDark, 0, 0.11, 0);
-  addCyl(root, 1.24, 1.32, 0.16, 8, mats.diamondPlate, 0, 0.28, 0);
+function buildEwCrew(
+  root: THREE.Group,
+  rig: TowerRig3D,
+  mats: ModelMaterials,
+  level: number,
+  specialization: 'A' | 'B' | null = null
+) {
+  const batcher = new StaticMeshBatcher('ew_crew', level, specialization);
+  const specA = specialization === 'A';
+  const specB = specialization === 'B';
 
-  const shelterGeo = createSideExtrudeGeo(
-    [
-      [-0.78, 0.36],
-      [0.78, 0.36],
-      [0.78, 1.08],
-      [-0.78, 1.08]
-    ],
-    1.56,
-    0.04,
-    0.04
-  );
-  root.add(new THREE.Mesh(shelterGeo, mats.oliveDark));
-  addBox(root, 1.1, 0.18, 0.1, mats.radarCyan, 0, 0.92, 0.82);
-  addBox(root, 0.32, 0.28, 0.08, mats.steel, -0.58, 0.68, 0.82);
+  root.add(createContactShadowMesh(1.85, 0.4));
 
-  addCyl(root, 0.14, 0.24, 1.55, 6, mats.steel, 0, 1.85, 0);
-  for (const h of [1.4, 1.9, 2.4]) {
-    addBox(root, 0.62, 0.06, 0.62, mats.darkSteel, 0, h, 0);
+  // Utility C4ISR base + command shelter + AC cooling louvers + rear tactical generator (NO weapon barrels)
+  batcher.add('root', 'concreteDark', getChamferedCylinderGeo(1.54, 1.66, 0.22, 8, 0.04), 0, 0.11, 0);
+
+  batcher.add('root', 'oliveDark', getRoundedBoxGeo(1.56, 0.72, 1.56, 0.05, 1), 0, 0.64, 0);
+  batcher.add('root', 'oliveDark', getChamferedBoxGeo(0.64, 0.44, 0.42, 0.04), 0, 0.5, -0.94);
+  batcher.add('root', 'oliveDark', getChamferedBoxGeo(0.42, 0.36, 0.28, 0.03), 0.78, 0.64, -0.2);
+
+  batcher.add('root', 'steel', getChamferedBoxGeo(0.32, 0.28, 0.08, 0.015), -0.52, 0.6, 0.8);
+  batcher.add('root', 'steel', getChamferedBoxGeo(0.12, 0.26, 0.24, 0.015), 0.96, 0.64, -0.2);
+  batcher.add('root', 'steel', getChamferedCylinderGeo(0.14, 0.24, 1.5, 8, 0.025), 0, 1.74, 0);
+  for (const h of [1.34, 1.84, 2.32]) {
+    batcher.add('root', 'steel', getChamferedBoxGeo(0.62, 0.06, 0.62, 0.015), 0, h, 0);
   }
 
+  // Thin tactical visor bar on shelter (<= 2% emissive area)
+  const visorMat: StructuralMatKey = specB ? 'specTrimB' : 'specTrimA';
+  batcher.add('root', visorMat, getChamferedBoxGeo(1.02, 0.09, 0.06, 0.01), 0, 0.84, 0.8);
+
+  const pivots: Record<string, THREE.Object3D> = { root };
   rig.radarPivots = [];
+
+  // Closed solid parabolic dish profile (zero back-face culling + crisp ghost silhouette)
+  const solidDishGeo = createLatheYGeo(
+    [
+      [0.001, -0.05],
+      [0.22, -0.04],
+      [0.44, 0.16],
+      [0.46, 0.22],
+      [0.42, 0.23],
+      [0.3, 0.1],
+      [0.001, 0.03]
+    ],
+    16
+  );
+
   if (level === 1) {
+    const feedGeo = getChamferedCylinderGeo(0.028, 0.038, 0.3, 6, 0.006);
     for (let i = 0; i < 3; i++) {
       const a = (i / 3) * Math.PI * 2;
       const pivot = new THREE.Group();
-      pivot.position.set(Math.sin(a) * 0.56, 1.7 + i * 0.35, Math.cos(a) * 0.56);
-      const dish = new THREE.Mesh(
-        createLatheYGeo([
-          [0.02, 0.0],
-          [0.32, 0.08],
-          [0.44, 0.22]
-        ]),
-        mats.steel
-      );
-      dish.rotation.x = Math.PI / 2 - 0.3;
-      pivot.add(dish);
-      addCyl(pivot, 0.03, 0.03, 0.36, 6, mats.radarCyan, 0, 0.08, 0.22, Math.PI / 2 - 0.3, 0, 0);
+      pivot.position.set(Math.sin(a) * 0.56, 1.82 + i * 0.28, Math.cos(a) * 0.56);
       root.add(pivot);
       rig.radarPivots.push(pivot);
+
+      const rKey = `radar_${i}`;
+      pivots[rKey] = pivot;
+      batcher.add(rKey, 'steel', solidDishGeo, 0, 0, 0, Math.PI / 2 - 0.3, 0, 0);
+      batcher.add(rKey, 'steel', feedGeo, 0, 0.07, 0.2, Math.PI / 2 - 0.3, 0, 0);
     }
   } else if (level === 2) {
     const turretPivot = new THREE.Group();
     turretPivot.position.set(0, 2.15, 0);
     root.add(turretPivot);
     rig.turretPivot = turretPivot;
+    pivots.turret = turretPivot;
 
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2;
+    const panelGeo = getChamferedBoxGeo(0.52, 0.38, 0.12, 0.025);
+    // Front/back EW arrays batched inside turretPivot + 2 opposing scanning side radarPivots
+    batcher.add('turret', 'copperAesa', panelGeo, 0, 0.15, 0.52, -0.22, 0, 0);
+    batcher.add('turret', 'copperAesa', panelGeo, 0, 0.15, -0.52, -0.22, Math.PI, 0);
+    for (let i = 0; i < 2; i++) {
+      const sx = i === 0 ? -0.52 : 0.52;
       const dishPivot = new THREE.Group();
-      dishPivot.position.set(Math.sin(a) * 0.52, 0.15, Math.cos(a) * 0.52);
-      dishPivot.rotation.y = a;
-      addBox(dishPivot, 0.54, 0.42, 0.1, mats.darkSteel, 0, 0, 0, -0.22, 0, 0);
-      addBox(dishPivot, 0.44, 0.32, 0.06, mats.copperAesa, 0, 0, 0.06, -0.22, 0, 0);
+      dishPivot.position.set(sx, 0.15, 0);
+      dishPivot.rotation.y = i === 0 ? -Math.PI / 2 : Math.PI / 2;
       turretPivot.add(dishPivot);
       rig.radarPivots.push(dishPivot);
+
+      const rKey = `radar_${i}`;
+      pivots[rKey] = dishPivot;
+      batcher.add(rKey, 'copperAesa', panelGeo, 0, 0, 0, -0.22, 0, 0);
     }
-    for (const [ax, az] of [[-0.45, -0.45], [0.45, -0.45], [-0.45, 0.45], [0.45, 0.45]]) {
-      addCyl(root, 0.025, 0.035, 1.3, 6, mats.steel, ax, 2.25, az);
-      addCyl(root, 0.045, 0.045, 0.14, 8, mats.radarCyan, ax, 2.9, az);
+
+    const whipGeo = getChamferedCylinderGeo(0.022, 0.032, 1.25, 6, 0.005);
+    for (const [ax, az] of [
+      [-0.48, -0.48],
+      [0.48, -0.48],
+      [-0.48, 0.48],
+      [0.48, 0.48]
+    ]) {
+      batcher.add('root', 'steel', whipGeo, ax, 2.15, az);
     }
   } else {
-    addCyl(root, 0.12, 0.18, 1.95, 10, mats.copperAesa, 0, 2.35, 0);
-    for (let i = 0; i < 5; i++) {
-      const coilGeo = getGeo(`ew_coil_${i}`, () => new THREE.TorusGeometry(0.28 - i * 0.02, 0.035, 8, 16));
-      const coil = new THREE.Mesh(coilGeo, mats.radarCyan);
-      coil.rotation.x = Math.PI / 2;
-      coil.position.y = 1.9 + i * 0.28;
-      root.add(coil);
-    }
-    addCyl(root, 0.2, 0.06, 0.28, 12, mats.radarCyan, 0, 3.45, 0);
+    // Lv4+ / 5A / 6B: Copper EW column + rotating turretPivot + specialization hardware
+    const turretPivot = new THREE.Group();
+    turretPivot.position.set(0, 2.05, 0);
+    root.add(turretPivot);
+    rig.turretPivot = turretPivot;
+    pivots.turret = turretPivot;
 
+    batcher.add('turret', 'copperAesa', getChamferedCylinderGeo(0.12, 0.18, 1.9, 10, 0.02), 0, 0.27, 0);
     for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2;
-      const p = new THREE.Group();
-      p.position.set(Math.sin(a) * 0.72, 1.85, Math.cos(a) * 0.72);
-      p.rotation.y = a;
-      addBox(p, 0.56, 0.42, 0.1, mats.radarCyan, 0, 0, 0, -0.45, 0, 0);
-      root.add(p);
-      rig.radarPivots.push(p);
+      const coilGeo = getGeo(`ew_choke_${i}`, () => new THREE.TorusGeometry(0.26 - i * 0.02, 0.026, 4, 14));
+      batcher.add('turret', 'copperAesa', coilGeo, 0, -0.17 + i * 0.3, 0, Math.PI / 2, 0, 0);
+    }
+
+    if (specA) {
+      // 5A: Wide rotating AWACS / S-band radar bar atop mast + twin lateral long-range masts
+      for (const sx of [-0.78, 0.78]) {
+        batcher.add('root', 'steel', getChamferedCylinderGeo(0.04, 0.06, 1.45, 6, 0.01), sx, 1.85, -0.15);
+        batcher.add('root', 'steel', getChamferedCylinderGeo(0.1, 0.12, 0.22, 8, 0.02), sx, 2.62, -0.15);
+      }
+
+      const barPivot = new THREE.Group();
+      barPivot.position.set(0, 1.42, 0);
+      turretPivot.add(barPivot);
+      rig.radarPivots.push(barPivot);
+      pivots.radar_0 = barPivot;
+
+      batcher.add('radar_0', 'navalWhite', getRoundedBoxGeo(1.78, 0.34, 0.28, 0.05, 1), 0, 0, 0);
+      batcher.add('radar_0', 'specTrimA', getChamferedBoxGeo(1.56, 0.07, 0.3, 0.01), 0, 0, 0);
+
+      for (let i = 0; i < 2; i++) {
+        const sx = i === 0 ? -0.68 : 0.68;
+        const p = new THREE.Group();
+        p.position.set(sx, 0.1, 0);
+        p.rotation.y = i === 0 ? -Math.PI / 2 : Math.PI / 2;
+        turretPivot.add(p);
+        rig.radarPivots.push(p);
+        const rKey = `radar_${i + 1}`;
+        pivots[rKey] = p;
+        batcher.add(rKey, 'steel', getChamferedBoxGeo(0.46, 0.34, 0.09, 0.02), 0, 0, 0, -0.35, 0, 0);
+      }
+    } else if (specB) {
+      // 6B: Rotating electro-optical/thermal laser designator pod + 2 solid tilted uplink dishes + amber accent
+      const podPivot = new THREE.Group();
+      podPivot.position.set(0, 1.38, 0);
+      turretPivot.add(podPivot);
+      rig.radarPivots.push(podPivot);
+      pivots.radar_0 = podPivot;
+
+      batcher.add('radar_0', 'darkSteel', getChamferedBoxGeo(0.56, 0.42, 0.56, 0.045), 0, 0, 0);
+      batcher.add('radar_0', 'specTrimB', getChamferedCylinderGeo(0.095, 0.095, 0.08, 8, 0.01), -0.14, 0, 0.28, Math.PI / 2, 0, 0);
+      batcher.add('radar_0', 'specTrimB', getChamferedCylinderGeo(0.095, 0.095, 0.08, 8, 0.01), 0.14, 0, 0.28, Math.PI / 2, 0, 0);
+
+      const uplinkFeedGeo = getChamferedCylinderGeo(0.025, 0.035, 0.28, 6, 0.005);
+      for (let i = 0; i < 2; i++) {
+        const sx = i === 0 ? -0.72 : 0.72;
+        const p = new THREE.Group();
+        p.position.set(sx, 0.15, 0);
+        p.rotation.y = i === 0 ? -Math.PI / 2 : Math.PI / 2;
+        turretPivot.add(p);
+        rig.radarPivots.push(p);
+        const rKey = `radar_${i + 1}`;
+        pivots[rKey] = p;
+        batcher.add(rKey, 'steel', solidDishGeo, 0, 0, 0, Math.PI / 2 - 0.35, 0, 0);
+        batcher.add(rKey, 'steel', uplinkFeedGeo, 0, 0.08, 0.18, Math.PI / 2 - 0.35, 0, 0);
+      }
+    } else {
+      // Lv4+ baseline: 2 turret EW panels + 2 opposing scanning side EW panels
+      const panelGeo = getChamferedBoxGeo(0.54, 0.4, 0.1, 0.02);
+      batcher.add('turret', 'steel', panelGeo, 0, 0.05, 0.7, -0.4, 0, 0);
+      batcher.add('turret', 'steel', panelGeo, 0, 0.05, -0.7, -0.4, Math.PI, 0);
+      for (let i = 0; i < 2; i++) {
+        const sx = i === 0 ? -0.7 : 0.7;
+        const p = new THREE.Group();
+        p.position.set(sx, 0.05, 0);
+        p.rotation.y = i === 0 ? -Math.PI / 2 : Math.PI / 2;
+        turretPivot.add(p);
+        rig.radarPivots.push(p);
+        const rKey = `radar_${i}`;
+        pivots[rKey] = p;
+        batcher.add(rKey, 'steel', panelGeo, 0, 0, 0, -0.4, 0, 0);
+      }
     }
   }
 
+  batcher.flush(pivots, mats);
+
+  // Smooth 36-seg ewRings positioned outside dishes & antennas (no collision with dishes in 6B)
   rig.ewRings = [];
-  const ringCount = level >= 2 ? 2 : 1;
-  for (let i = 0; i < ringCount; i++) {
-    const ringGeo = getGeo(`ew_ring_${i}`, () => new THREE.TorusGeometry(0.95 + i * 0.35, 0.045, 8, 28));
-    const ring = new THREE.Mesh(ringGeo, mats.ewCyan);
+  const ringConfigs: Array<{ r: number; y: number }> =
+    level >= 2
+      ? [
+        { r: 1.18, y: 1.46 },
+        { r: 1.42, y: 3.1 }
+      ]
+      : [{ r: 1.18, y: 1.46 }];
+  for (let i = 0; i < ringConfigs.length; i++) {
+    const cfg = ringConfigs[i];
+    const ringGeo = getGeo(`ew_ring_v4_${i}`, () => new THREE.TorusGeometry(cfg.r, 0.028, 6, 36));
+    const ring = new THREE.Mesh(ringGeo, mats.ewRingSubtle);
     ring.rotation.x = Math.PI / 2;
-    ring.position.y = 1.85 + i * 0.6;
+    ring.position.y = cfg.y;
     ring.userData.noShadow = true;
     root.add(ring);
     rig.ewRings.push(ring);
@@ -2023,36 +2869,191 @@ function buildCryoTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials
   rig.muzzleFlashMesh = attachMuzzleFlashMesh(barrelPivot, mats, 0, 0, 1.52, 1.0, true);
 }
 
-function buildTeslaTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
-  addCyl(root, 1.56, 1.7, 0.24, 8, mats.concreteDark, 0, 0.12, 0);
-  addCyl(root, 1.24, 1.34, 0.2, 8, mats.darkSteel, 0, 0.34, 0);
+function buildTeslaTower(
+  root: THREE.Group,
+  rig: TowerRig3D,
+  mats: ModelMaterials,
+  level: number,
+  specialization: 'A' | 'B' | null = null
+) {
+  const batcher = new StaticMeshBatcher('tesla_tower', level, specialization);
+  const specA = specialization === 'A';
+  const specB = specialization === 'B';
+
+  root.add(createContactShadowMesh(1.85, 0.44));
+
+  // Octagonal concrete base & pedestal collar
+  batcher.add('root', 'concreteDark', getChamferedCylinderGeo(1.62, 1.76, 0.24, 8, 0.04), 0, 0.12, 0);
+  batcher.add('root', 'concreteDark', getChamferedCylinderGeo(1.26, 1.38, 0.16, 8, 0.03), 0, 0.3, 0);
 
   const turretPivot = new THREE.Group();
-  turretPivot.position.set(0, 0.45, 0);
+  turretPivot.position.set(0, 0.38, 0);
   root.add(turretPivot);
   rig.turretPivot = turretPivot;
 
-  addCyl(turretPivot, 0.34, 0.48, 1.75, 12, mats.copperAesa, 0, 0.9, 0);
-  const ringCount = 3 + level;
-  for (let i = 0; i < ringCount; i++) {
-    const tor = new THREE.Mesh(
-      getGeo(`tesla_coil_${i}`, () => new THREE.TorusGeometry(0.62 - i * 0.06, 0.065, 8, 20)),
-      mats.steel
+  // Armored turntable + 4 angular steel buttresses
+  batcher.add('turret', 'darkSteel', getChamferedCylinderGeo(1.14, 1.24, 0.16, 8, 0.03), 0, 0.08, 0);
+  const buttressGeo = getChamferedBoxGeo(0.2, 0.58, 0.46, 0.03);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    batcher.add(
+      'turret',
+      'darkSteel',
+      buttressGeo,
+      Math.sin(a) * 0.86,
+      0.32,
+      Math.cos(a) * 0.86,
+      0,
+      a,
+      0
     );
-    tor.rotation.x = Math.PI / 2;
-    tor.position.y = 0.72 + i * 0.26;
-    turretPivot.add(tor);
   }
 
-  const orb = new THREE.Mesh(getGeo('tesla_orb', () => new THREE.SphereGeometry(0.42, 14, 12)), mats.radarCyan);
-  orb.position.set(0, 1.95 + level * 0.15, 0);
-  turretPivot.add(orb);
+  // Side transformer/capacitor housings with cooling fins (2 at Lv1 -> 4 at Lv2+; 6B swaps to 2 mega-capacitors)
+  const capAngles = specB ? [] : level === 1 ? [Math.PI * 0.5, Math.PI * 1.5] : [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5];
+  const capBodyGeo = getChamferedBoxGeo(0.32, 0.54, 0.32, 0.04);
+  const capFinGeo = getChamferedBoxGeo(0.38, 0.06, 0.38, 0.01);
+  const capInsulGeo = getChamferedCylinderGeo(0.08, 0.1, 0.16, 6, 0.015);
+  for (const a of capAngles) {
+    const cx = Math.sin(a) * 0.96;
+    const cz = Math.cos(a) * 0.96;
+    batcher.add('turret', 'darkSteel', capBodyGeo, cx, 0.36, cz, 0, a, 0);
+    batcher.add('turret', 'darkSteel', capFinGeo, cx, 0.4, cz, 0, a, 0);
+    batcher.add('turret', 'navalWhite', capInsulGeo, cx, 0.7, cz);
+  }
 
+  // 6B: 2 armored cylindrical 16-seg mega-capacitors on flanks + heavy copper busbars + darkSteel collar clamps
+  if (specB) {
+    const megaGeo = getChamferedCylinderGeo(0.27, 0.29, 1.06, 16, 0.04);
+    const busVertGeo = getGeo('tesla_6b_bus_v', () => new THREE.BoxGeometry(0.08, 0.58, 0.08));
+    const clampGeo = getGeo('tesla_6b_clamp', () => new THREE.BoxGeometry(0.18, 0.14, 0.18));
+    const collarBoxGeo = getGeo('tesla_6b_collar', () => new THREE.BoxGeometry(0.46, 0.07, 0.46));
+    const busCrossGeo = getGeo('tesla_6b_bus_h', () => new THREE.BoxGeometry(2.04, 0.08, 0.08));
+    for (const sx of [-1.18, 1.18]) {
+      batcher.add('turret', 'darkSteel', megaGeo, sx, 0.58, 0);
+      batcher.add('turret', 'navalWhite', getChamferedCylinderGeo(0.16, 0.2, 0.18, 6, 0.02), sx, 1.18, 0);
+      batcher.add('turret', 'copperAesa', busVertGeo, sx * 0.85, 0.98, 0);
+      batcher.add('turret', 'darkSteel', clampGeo, sx * 0.85, 1.24, 0);
+      batcher.add('turret', 'specTrimB', collarBoxGeo, sx, 0.84, 0);
+    }
+    batcher.add('turret', 'copperAesa', busCrossGeo, 0, 1.24, 0);
+    batcher.add('turret', 'darkSteel', getChamferedCylinderGeo(0.32, 0.34, 0.14, 12, 0.02), 0, 1.24, 0);
+  }
+
+  // Smooth 18-seg ribbed ceramic insulator column (grows taller Lv1 -> Lv2-3 -> Lv4+)
+  const colH = level === 1 ? 1.55 : level === 2 ? 1.85 : 2.15;
+  const shedCount = level === 1 ? 3 : level === 2 ? 4 : 5;
+  const colProfile: [number, number][] = [[0.01, 0.0], [0.42, 0.0]];
+  for (let i = 0; i < shedCount; i++) {
+    const y0 = 0.14 + (i / shedCount) * (colH - 0.28);
+    const yMid = y0 + (colH - 0.28) / (shedCount * 2);
+    const rBase = 0.34 - (i / shedCount) * 0.09;
+    colProfile.push([rBase * 0.72, y0], [rBase, yMid], [rBase * 0.72, yMid + 0.06]);
+  }
+  colProfile.push([0.24, colH], [0.01, colH]);
+  batcher.add('turret', 'navalWhite', createLatheYGeo(colProfile, 18), 0, 0.16, 0);
+
+  // Copper helical winding coils along upper column
+  const coilCount = level === 1 ? 3 : level === 2 ? 4 : 5;
+  for (let i = 0; i < coilCount; i++) {
+    const coilR = 0.45 - i * 0.028;
+    const coilGeo = getGeo(`tesla_coil_v5_${i}`, () => new THREE.TorusGeometry(coilR, 0.036, 3, 10));
+    batcher.add('turret', 'copperAesa', coilGeo, 0, 0.62 + i * 0.26, 0, Math.PI / 2 + 0.06, 0, 0);
+  }
+
+  // 3 -> 4 external lightning arrestor pylons
+  const pylonCount = level >= 3 ? 4 : 3;
+  const pylonGeo = getChamferedCylinderGeo(0.038, 0.072, colH * 0.86, 6, 0.015);
+  const tipMat: StructuralMatKey = specB ? 'specTrimB' : 'specTrimA';
+  const tipGeo = getGeo('tesla_tip_cone', () => new THREE.ConeGeometry(0.048, 0.18, 4));
+  for (let i = 0; i < pylonCount; i++) {
+    const a = (i / pylonCount) * Math.PI * 2 + 0.35;
+    const px = Math.sin(a) * 0.72;
+    const pz = Math.cos(a) * 0.72;
+    batcher.add('turret', 'darkSteel', pylonGeo, px, 0.18 + colH * 0.43, pz);
+    batcher.add('turret', tipMat, tipGeo, px, 0.22 + colH * 0.86, pz);
+  }
+
+  // Top metallic crown + smooth 24-seg dark conductive toroid(s) + controlled <= 5% emissive discharge ring
+  const topY = colH + 0.24;
+  batcher.add('turret', 'darkSteel', getChamferedCylinderGeo(0.28, 0.34, 0.18, 10, 0.025), 0, topY - 0.06, 0);
+
+  const mainToroidGeo = getGeo('tesla_toroid_main_v4', () => new THREE.TorusGeometry(0.56, 0.105, 5, 24));
+  batcher.add('turret', 'darkSteel', mainToroidGeo, 0, topY + 0.08, 0, Math.PI / 2, 0, 0);
+
+  if (specB) {
+    // 6B: Heavy double 24-seg toroid + amber overload collector ring
+    const upperToroidGeo = getGeo('tesla_toroid_upper_v4', () => new THREE.TorusGeometry(0.46, 0.09, 5, 24));
+    batcher.add('turret', 'darkSteel', upperToroidGeo, 0, topY + 0.3, 0, Math.PI / 2, 0, 0);
+    const overloadRingGeo = getGeo('tesla_overload_ring_v4', () => new THREE.TorusGeometry(0.58, 0.028, 4, 24));
+    batcher.add('turret', 'specTrimB', overloadRingGeo, 0, topY + 0.19, 0, Math.PI / 2, 0, 0);
+  } else {
+    // Subtle inner cyan discharge arc collar (<= 5% projected area)
+    const arcRingGeo = getGeo('tesla_arc_ring_v4', () => new THREE.TorusGeometry(0.38, 0.024, 4, 24));
+    batcher.add('turret', 'specTrimA', arcRingGeo, 0, topY + 0.12, 0, Math.PI / 2, 0, 0);
+  }
+
+  if (specA) {
+    // 5A: Coaxial 3-phase star emitter arms computed via Quaternion().setFromUnitVectors(UP, dir)
+    const armGeo = getChamferedCylinderGeo(0.052, 0.062, 0.68, 8, 0.015);
+    const cuffGeo = getChamferedCylinderGeo(0.088, 0.088, 0.22, 8, 0.02);
+    const upVec = new THREE.Vector3(0, 1, 0);
+    const dirVec = new THREE.Vector3();
+    const qBranch = new THREE.Quaternion();
+    const eBranch = new THREE.Euler();
+    const hubOriginY = topY + 0.12;
+    const tilt = 0.64;
+
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2;
+      dirVec.set(Math.sin(a) * Math.sin(tilt), Math.cos(tilt), Math.cos(a) * Math.sin(tilt)).normalize();
+      qBranch.setFromUnitVectors(upVec, dirVec);
+      eBranch.setFromQuaternion(qBranch, 'XYZ');
+
+      batcher.add(
+        'turret',
+        'darkSteel',
+        armGeo,
+        dirVec.x * 0.36,
+        hubOriginY + dirVec.y * 0.36,
+        dirVec.z * 0.36,
+        eBranch.x,
+        eBranch.y,
+        eBranch.z
+      );
+      batcher.add(
+        'turret',
+        'navalWhite',
+        cuffGeo,
+        dirVec.x * 0.44,
+        hubOriginY + dirVec.y * 0.44,
+        dirVec.z * 0.44,
+        eBranch.x,
+        eBranch.y,
+        eBranch.z
+      );
+      batcher.add(
+        'turret',
+        'specTrimA',
+        tipGeo,
+        dirVec.x * 0.76,
+        hubOriginY + dirVec.y * 0.76,
+        dirVec.z * 0.76,
+        eBranch.x,
+        eBranch.y,
+        eBranch.z
+      );
+    }
+  }
+
+  batcher.flush({ root, turret: turretPivot }, mats);
+
+  const muzzleY = topY + (specA ? 0.42 : specB ? 0.34 : 0.16);
   const muzzlePoint = new THREE.Object3D();
-  muzzlePoint.position.set(0, 1.95 + level * 0.15, 0);
+  muzzlePoint.position.set(0, muzzleY, 0);
   turretPivot.add(muzzlePoint);
   rig.muzzlePoint = muzzlePoint;
-  rig.muzzleFlashMesh = attachMuzzleFlashMesh(turretPivot, mats, 0, 1.95 + level * 0.15, 0, 1.2, true);
+  rig.muzzleFlashMesh = attachMuzzleFlashMesh(turretPivot, mats, 0, muzzleY, 0, 1.2, true);
 }
 
 function buildToxicTower(root: THREE.Group, rig: TowerRig3D, mats: ModelMaterials, level: number) {
@@ -3904,51 +4905,58 @@ export function createMissileMesh3D(kind: string): THREE.Group {
 }
 
 /**
- * Returns a single cached Ghost 3D hologram per tower type (zero allocation on hover or click).
+ * Returns a single cached Ghost 3D hologram per tower type (2 drawables: 1 merged translucent mesh + 1 crisp EdgesGeometry).
  */
 export function createGhostTower3D(defId: string): { root: THREE.Group; setValid: (valid: boolean) => void } {
   const cached = ghostCache.get(defId);
   if (cached) return cached;
 
-  const { root } = createTowerModel3D(defId, 1);
+  const { root: srcRoot } = createTowerModel3D(defId, 1);
+  srcRoot.updateMatrixWorld(true);
+
+  const clones: THREE.BufferGeometry[] = [];
+  srcRoot.traverse((child) => {
+    const m = child as THREE.Mesh;
+    if (!m.isMesh || m.userData?.noShadow) return;
+    const cloned = m.geometry.clone();
+    cloned.applyMatrix4(m.matrixWorld);
+    clones.push(cloned);
+  });
+
+  const mergedGeo = mergeStaticGeometries(clones, {
+    preserveVertexColors: false,
+    disposeInputs: true
+  });
+  const edgesGeo = createGhostEdges(mergedGeo, 24);
+
   const holoMat = new THREE.MeshBasicMaterial({
-    color: 0x22c55e,
+    color: 0x38bdf8,
     transparent: true,
-    opacity: 0.45,
+    opacity: 0.34,
     depthWrite: false
   });
-  const wireMat = new THREE.MeshBasicMaterial({
-    color: 0x4ade80,
-    wireframe: true,
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0x7dd3fc,
     transparent: true,
-    opacity: 0.35
+    opacity: 0.78,
+    depthWrite: false
   });
 
-  const meshes: THREE.Mesh[] = [];
-  root.traverse((child) => {
-    if ((child as THREE.Mesh).isMesh) {
-      meshes.push(child as THREE.Mesh);
-    }
-  });
+  const ghostRoot = new THREE.Group();
+  const holoMesh = new THREE.Mesh(mergedGeo, holoMat);
+  holoMesh.castShadow = false;
+  holoMesh.receiveShadow = false;
 
-  for (const m of meshes) {
-    m.castShadow = false;
-    m.receiveShadow = false;
-    if (m.userData?.noShadow) {
-      m.visible = false;
-      continue;
-    }
-    m.material = holoMat;
-    const wire = new THREE.Mesh(m.geometry, wireMat);
-    wire.scale.setScalar(1.01);
-    m.add(wire);
-  }
+  const edgesLines = new THREE.LineSegments(edgesGeo, lineMat);
+  edgesLines.renderOrder = 2;
+
+  ghostRoot.add(holoMesh, edgesLines);
 
   const entry = {
-    root,
+    root: ghostRoot,
     setValid: (valid: boolean) => {
-      holoMat.color.setHex(valid ? 0x22c55e : 0xef4444);
-      wireMat.color.setHex(valid ? 0x86efac : 0xfca5a5);
+      holoMat.color.setHex(valid ? 0x38bdf8 : 0xf97316);
+      lineMat.color.setHex(valid ? 0x7dd3fc : 0xfdba74);
     }
   };
   ghostCache.set(defId, entry);
@@ -3956,8 +4964,8 @@ export function createGhostTower3D(defId: string): { root: THREE.Group; setValid
 }
 
 let cachedWearWarmGeo: THREE.BoxGeometry | null = null;
-let cachedWearWarmMat: THREE.MeshStandardMaterial | null = null;
-let cachedWearWarmMesh: THREE.Mesh | null = null;
+const cachedWearWarmMats: THREE.MeshStandardMaterial[] = [];
+const cachedWearWarmMeshes: THREE.Mesh[] = [];
 
 /**
  * Pre-warms all tower geometries, ghost holograms, enemy rigs, and compiles WebGL shaders at boot
@@ -4008,8 +5016,8 @@ export function prewarmAllMilitaryModels(
       ghostParent.add(gm.root);
     }
 
-    const maxLv = id === 'hesco' ? 1 : 4;
-    for (let lv = 1; lv <= maxLv; lv++) {
+    const warmLevels = id === 'hesco' ? [1] : [1, 2, 4];
+    for (const lv of warmLevels) {
       const rig = createTowerModel3D(id, lv);
       warmGroup.add(rig.root);
     }
@@ -4070,15 +5078,33 @@ export function prewarmAllMilitaryModels(
   warmGroup.add(createMissileMesh3D('hellfire'));
   warmGroup.add(createMissileMesh3D('boss_missile'));
 
-  // Prewarm SurfaceShaderKit military wear shader variant once at boot.
+  // Prewarm all 3 canonical SurfaceShaderKit wear shader variants (ARMOR, STEEL, CONCRETE) once at boot.
   // Keep cached at module scope (NEVER dispose immediately after compile — Chrome KHR_parallel_shader_compile is async).
-  if (!cachedWearWarmMesh) {
+  if (cachedWearWarmMeshes.length === 0) {
     cachedWearWarmGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
-    cachedWearWarmMat = new THREE.MeshStandardMaterial({ color: PALETTE.natoOlive, roughness: 0.78, metalness: 0.04 });
-    applyMilitaryWearShader(cachedWearWarmMat, { variantKey: MILITARY_WEAR_VARIANTS.ARMOR });
-    cachedWearWarmMesh = new THREE.Mesh(cachedWearWarmGeo, cachedWearWarmMat);
+    const variantConfigs: Array<{ variant: string; color: number; roughness: number; metalness: number }> = [
+      { variant: MILITARY_WEAR_VARIANTS.ARMOR, color: PALETTE.natoOlive, roughness: 0.74, metalness: 0.04 },
+      { variant: MILITARY_WEAR_VARIANTS.STEEL, color: PALETTE.gunmetal, roughness: 0.34, metalness: 0.86 },
+      { variant: MILITARY_WEAR_VARIANTS.CONCRETE, color: PALETTE.concrete, roughness: 0.9, metalness: 0.02 }
+    ];
+    for (const cfg of variantConfigs) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: cfg.color,
+        roughness: cfg.roughness,
+        metalness: cfg.metalness
+      });
+      applyMilitaryWearShader(mat, {
+        variantKey: cfg.variant,
+        dirtColor: activeTowerDirtColor
+      });
+      const mesh = new THREE.Mesh(cachedWearWarmGeo, mat);
+      cachedWearWarmMats.push(mat);
+      cachedWearWarmMeshes.push(mesh);
+    }
   }
-  warmGroup.add(cachedWearWarmMesh);
+  for (const warmMesh of cachedWearWarmMeshes) {
+    warmGroup.add(warmMesh);
+  }
 
   renderer.compile(scene, camera);
 

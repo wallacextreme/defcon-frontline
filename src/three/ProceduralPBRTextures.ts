@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+import { createNormalTextureFromHeightCanvas } from './SurfaceShaderKit.ts';
 
 export interface PBRTextureSet {
   map: THREE.CanvasTexture;
   bumpMap: THREE.CanvasTexture;
+  normalMap: THREE.CanvasTexture;
   roughnessMap: THREE.CanvasTexture;
 }
 
@@ -36,9 +38,43 @@ function finalizeTexture(canvas: HTMLCanvasElement, isAlbedo: boolean, anisotrop
   return tex;
 }
 
+function hexToRgb(hex: string): [number, number, number] {
+  const clean = hex.replace('#', '');
+  const n = parseInt(clean, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function periodicNoise2D(u: number, v: number, freq: number, seed: number): number {
+  const f = Math.max(1, Math.round(freq));
+  const x = (((u % 1) + 1) % 1) * f;
+  const y = (((v % 1) + 1) % 1) * f;
+  const x0 = Math.floor(x) % f;
+  const y0 = Math.floor(y) % f;
+  const x1 = (x0 + 1) % f;
+  const y1 = (y0 + 1) % f;
+  const fx = x - Math.floor(x);
+  const fy = y - Math.floor(y);
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+
+  const hash = (ix: number, iy: number): number => {
+    let h = (ix * 374761393 + iy * 668265263 + seed * 1442695041) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+  };
+
+  const n00 = hash(x0, y0);
+  const n10 = hash(x1, y0);
+  const n01 = hash(x0, y1);
+  const n11 = hash(x1, y1);
+  const nx0 = n00 + (n10 - n00) * sx;
+  const nx1 = n01 + (n11 - n01) * sx;
+  return nx0 + (nx1 - nx0) * sy;
+}
+
 function buildArmorSet(
   baseHex: string,
-  panelDarkHex: string,
+  _panelDarkHex: string,
   edgeWearHex: string,
   seed: number,
   anisotropy: number,
@@ -50,21 +86,65 @@ function buildArmorSet(
   const [cBump, bctx] = makeCanvas(S);
   const [cRough, rctx] = makeCanvas(S);
 
-  // Base fill
-  ctx.fillStyle = baseHex;
-  ctx.fillRect(0, 0, S, S);
+  // Tileable organic FBM CARC paint base (zero grid squares, zero circular blotches)
+  const [br, bg, bb] = hexToRgb(baseHex);
+  const gridN = 64;
+  const fbmGrid = new Float32Array(gridN * gridN);
+  for (let gy = 0; gy < gridN; gy++) {
+    const v = gy / gridN;
+    for (let gx = 0; gx < gridN; gx++) {
+      const u = gx / gridN;
+      fbmGrid[gy * gridN + gx] =
+        periodicNoise2D(u, v, 3, seed + 11) * 0.55 +
+        periodicNoise2D(u, v, 6, seed + 37) * 0.3 +
+        periodicNoise2D(u, v, 12, seed + 73) * 0.15;
+    }
+  }
+
+  const mapImg = ctx.createImageData(S, S);
+  const roughImg = rctx.createImageData(S, S);
+  const scaleToGrid = gridN / S;
+  for (let y = 0; y < S; y++) {
+    const gyf = y * scaleToGrid;
+    const gy0 = Math.floor(gyf) % gridN;
+    const gy1 = (gy0 + 1) % gridN;
+    const ty = gyf - Math.floor(gyf);
+    for (let x = 0; x < S; x++) {
+      const gxf = x * scaleToGrid;
+      const gx0 = Math.floor(gxf) % gridN;
+      const gx1 = (gx0 + 1) % gridN;
+      const tx = gxf - Math.floor(gxf);
+      const a0 = fbmGrid[gy0 * gridN + gx0];
+      const a1 = fbmGrid[gy0 * gridN + gx1];
+      const b0 = fbmGrid[gy1 * gridN + gx0];
+      const b1 = fbmGrid[gy1 * gridN + gx1];
+      const fbm = (a0 + (a1 - a0) * tx) * (1 - ty) + (b0 + (b1 - b0) * tx) * ty;
+      const delta = fbm - 0.5;
+      const o = (y * S + x) * 4;
+      mapImg.data[o] = Math.max(0, Math.min(255, Math.round(br + delta * 36)));
+      mapImg.data[o + 1] = Math.max(0, Math.min(255, Math.round(bg + delta * 34)));
+      mapImg.data[o + 2] = Math.max(0, Math.min(255, Math.round(bb + delta * 30)));
+      mapImg.data[o + 3] = 255;
+
+      const rVal = Math.max(152, Math.min(228, Math.round(190 - delta * 44)));
+      roughImg.data[o] = rVal;
+      roughImg.data[o + 1] = rVal;
+      roughImg.data[o + 2] = rVal;
+      roughImg.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(mapImg, 0, 0);
+  rctx.putImageData(roughImg, 0, 0);
   bctx.fillStyle = '#808080';
   bctx.fillRect(0, 0, S, S);
-  rctx.fillStyle = '#b8b8b8'; // ~0.72 matte CARC paint roughness
-  rctx.fillRect(0, 0, S, S);
 
-  // Optional 3-tone OPFOR military camo blobs
+  // Optional 3-tone OPFOR military camo organic blotches
   if (camoPalette) {
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < 20; i++) {
       const cx = rand() * S;
       const cy = rand() * S;
-      const rx = 45 + rand() * 85;
-      const ry = 30 + rand() * 65;
+      const rx = 42 + rand() * 82;
+      const ry = 26 + rand() * 58;
       ctx.fillStyle = camoPalette[i % camoPalette.length];
       ctx.save();
       ctx.translate(cx, cy);
@@ -76,117 +156,43 @@ function buildArmorSet(
     }
   }
 
-  // Micro surface grain & brushed steel variation
-  for (let i = 0; i < 4200; i++) {
+  // Directional brushed micro-grain (subtle albedo, crisp normal micro-texture)
+  for (let i = 0; i < 3600; i++) {
     const x = rand() * S;
     const y = rand() * S;
-    const w = 1 + rand() * 4;
-    const h = 1 + rand() * 2;
+    const w = 3 + rand() * 11;
+    const h = 1 + rand() * 1.4;
     const dark = rand() > 0.5;
-    ctx.fillStyle = dark ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.06)';
+    ctx.fillStyle = dark ? 'rgba(0,0,0,0.032)' : 'rgba(255,255,255,0.024)';
     ctx.fillRect(x, y, w, h);
-    bctx.fillStyle = dark ? 'rgba(105,105,105,0.22)' : 'rgba(150,150,150,0.22)';
+    bctx.fillStyle = dark ? 'rgba(110,110,110,0.2)' : 'rgba(146,146,146,0.2)';
     bctx.fillRect(x, y, w, h);
   }
 
-  // Oil / soot grime streaks
-  for (let i = 0; i < 16; i++) {
-    const gx = rand() * S;
-    const gy = rand() * S;
-    const rad = 18 + rand() * 52;
-    const grad = ctx.createRadialGradient(gx, gy, 2, gx, gy, rad);
-    grad.addColorStop(0, 'rgba(18, 16, 14, 0.28)');
-    grad.addColorStop(1, 'rgba(18, 16, 14, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(gx - rad, gy - rad, rad * 2, rad * 2);
-
-    rctx.fillStyle = 'rgba(65, 65, 65, 0.28)'; // oil slick slightly glossier
-    rctx.beginPath();
-    rctx.arc(gx, gy, rad * 0.6, 0, Math.PI * 2);
-    rctx.fill();
-  }
-
-  // Armor plate grid seams (2x2 plates) + metallic edge chipping + corner rivets
-  const step = 256;
-  for (let py = 0; py < S; py += step) {
-    for (let px = 0; px < S; px += step) {
-      // Recessed weld seam
-      ctx.strokeStyle = panelDarkHex;
-      ctx.lineWidth = 4;
-      ctx.strokeRect(px + 2, py + 2, step - 4, step - 4);
-
-      bctx.strokeStyle = '#2c2c2c';
-      bctx.lineWidth = 5;
-      bctx.strokeRect(px + 2, py + 2, step - 4, step - 4);
-
-      // Metallic edge wear highlight along panel bevel
-      ctx.strokeStyle = edgeWearHex;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(px + 6, py + 6, step - 12, step - 12);
-
-      rctx.strokeStyle = '#555555'; // shiny exposed steel along chipped edges
-      rctx.lineWidth = 3;
-      rctx.strokeRect(px + 5, py + 5, step - 10, step - 10);
-
-      // Corner & mid-seam steel rivets
-      const rivetOffsets = [
-        [14, 14],
-        [step - 14, 14],
-        [14, step - 14],
-        [step - 14, step - 14],
-        [step * 0.5, 14],
-        [step * 0.5, step - 14],
-        [14, step * 0.5],
-        [step - 14, step * 0.5]
-      ];
-      for (const [rx, ry] of rivetOffsets) {
-        const cx = px + rx;
-        const cy = py + ry;
-        ctx.fillStyle = 'rgba(0,0,0,0.45)';
-        ctx.beginPath();
-        ctx.arc(cx + 1, cy + 1, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.fillStyle = edgeWearHex;
-        ctx.beginPath();
-        ctx.arc(cx, cy, 4, 0, Math.PI * 2);
-        ctx.fill();
-
-        bctx.fillStyle = '#ededed';
-        bctx.beginPath();
-        bctx.arc(cx, cy, 4.2, 0, Math.PI * 2);
-        bctx.fill();
-
-        rctx.fillStyle = '#404040';
-        rctx.beginPath();
-        rctx.arc(cx, cy, 4.2, 0, Math.PI * 2);
-        rctx.fill();
-      }
-    }
-  }
-
-  // Subtle combat scratches
-  for (let i = 0; i < 18; i++) {
+  // Fine random scratches (stronger in normal/roughness, faint in albedo)
+  const [wr, wg, wb] = hexToRgb(edgeWearHex);
+  const faintScratch = `rgba(${wr},${wg},${wb},0.22)`;
+  for (let i = 0; i < 22; i++) {
     const sx = rand() * S;
     const sy = rand() * S;
     const ang = rand() * Math.PI * 2;
-    const len = 14 + rand() * 34;
-    ctx.strokeStyle = edgeWearHex;
-    ctx.lineWidth = 1.2;
+    const len = 10 + rand() * 28;
+    ctx.strokeStyle = faintScratch;
+    ctx.lineWidth = 1.0;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
     ctx.lineTo(sx + Math.cos(ang) * len, sy + Math.sin(ang) * len);
     ctx.stroke();
 
-    bctx.strokeStyle = '#454545';
-    bctx.lineWidth = 1.5;
+    bctx.strokeStyle = '#525252';
+    bctx.lineWidth = 1.4;
     bctx.beginPath();
     bctx.moveTo(sx, sy);
     bctx.lineTo(sx + Math.cos(ang) * len, sy + Math.sin(ang) * len);
     bctx.stroke();
 
-    rctx.strokeStyle = '#383838';
-    rctx.lineWidth = 2;
+    rctx.strokeStyle = '#6e6e6e';
+    rctx.lineWidth = 1.8;
     rctx.beginPath();
     rctx.moveTo(sx, sy);
     rctx.lineTo(sx + Math.cos(ang) * len, sy + Math.sin(ang) * len);
@@ -196,6 +202,7 @@ function buildArmorSet(
   return {
     map: finalizeTexture(cMap, true, anisotropy),
     bumpMap: finalizeTexture(cBump, false, anisotropy),
+    normalMap: createNormalTextureFromHeightCanvas(cBump, 1.55, 1, 1, anisotropy),
     roughnessMap: finalizeTexture(cRough, false, anisotropy)
   };
 }
@@ -265,6 +272,7 @@ function buildSandbagBurlap(anisotropy: number): PBRTextureSet {
   return {
     map: finalizeTexture(cMap, true, anisotropy),
     bumpMap: finalizeTexture(cBump, false, anisotropy),
+    normalMap: createNormalTextureFromHeightCanvas(cBump, 2.4, 1, 1, anisotropy),
     roughnessMap: finalizeTexture(cRough, false, anisotropy)
   };
 }
@@ -319,6 +327,7 @@ function buildTankTracks(anisotropy: number): PBRTextureSet {
   return {
     map: finalizeTexture(cMap, true, anisotropy),
     bumpMap: finalizeTexture(cBump, false, anisotropy),
+    normalMap: createNormalTextureFromHeightCanvas(cBump, 2.6, 1, 1, anisotropy),
     roughnessMap: finalizeTexture(cRough, false, anisotropy)
   };
 }
@@ -386,6 +395,7 @@ function buildOffroadTire(anisotropy: number): PBRTextureSet {
   return {
     map: finalizeTexture(cMap, true, anisotropy),
     bumpMap: finalizeTexture(cBump, false, anisotropy),
+    normalMap: createNormalTextureFromHeightCanvas(cBump, 2.6, 1, 1, anisotropy),
     roughnessMap: finalizeTexture(cRough, false, anisotropy)
   };
 }
@@ -482,6 +492,7 @@ function buildConcreteBunker(anisotropy: number): PBRTextureSet {
   return {
     map: finalizeTexture(cMap, true, anisotropy),
     bumpMap: finalizeTexture(cBump, false, anisotropy),
+    normalMap: createNormalTextureFromHeightCanvas(cBump, 2.1, 1, 1, anisotropy),
     roughnessMap: finalizeTexture(cRough, false, anisotropy)
   };
 }
@@ -527,6 +538,7 @@ function buildTacticalAsphalt(anisotropy: number): PBRTextureSet {
   return {
     map: finalizeTexture(cMap, true, anisotropy),
     bumpMap: finalizeTexture(cBump, false, anisotropy),
+    normalMap: createNormalTextureFromHeightCanvas(cBump, 1.8, 1, 1, anisotropy),
     roughnessMap: finalizeTexture(cRough, false, anisotropy)
   };
 }
@@ -553,9 +565,9 @@ function buildDiamondSteelPlate(anisotropy: number): PBRTextureSet {
       const ang = alt ? Math.PI / 4 : -Math.PI / 4;
 
       for (const draw of [
-        { target: ctx, fill: '#7e8896', w: 18, h: 6 },
-        { target: bctx, fill: '#f0f0f0', w: 19, h: 7 },
-        { target: rctx, fill: '#353535', w: 18, h: 6 }
+        { target: ctx, fill: '#66707c', w: 18, h: 6 },
+        { target: bctx, fill: '#cccccc', w: 18, h: 6 },
+        { target: rctx, fill: '#525252', w: 18, h: 6 }
       ]) {
         draw.target.save();
         draw.target.translate(cx, cy);
@@ -570,12 +582,13 @@ function buildDiamondSteelPlate(anisotropy: number): PBRTextureSet {
   return {
     map: finalizeTexture(cMap, true, anisotropy),
     bumpMap: finalizeTexture(cBump, false, anisotropy),
+    normalMap: createNormalTextureFromHeightCanvas(cBump, 1.8, 1, 1, anisotropy),
     roughnessMap: finalizeTexture(cRough, false, anisotropy)
   };
 }
 
 /**
- * Generates and caches all procedural 512x512 PBR texture sets (map, bumpMap, roughnessMap).
+ * Generates and caches all procedural 512x512 PBR texture sets (map, bumpMap, normalMap, roughnessMap).
  */
 export function getPBRTextures(maxAnisotropy = cachedAnisotropy): Record<string, PBRTextureSet> {
   if (cachedTextures) return cachedTextures;
@@ -610,31 +623,46 @@ export function createPBRMaterial(
   const sets = getPBRTextures();
   const set = sets[key] || sets.natoArmorPlate;
   const { repeat, ...matParams } = overrides;
+  const hasExplicitBump = matParams.bumpMap != null;
 
   let map = set.map;
   let bumpMap = set.bumpMap;
+  let normalMap = set.normalMap;
   let roughnessMap = set.roughnessMap;
 
   if (repeat) {
     map = set.map.clone();
     bumpMap = set.bumpMap.clone();
+    normalMap = set.normalMap.clone();
     roughnessMap = set.roughnessMap.clone();
     map.repeat.set(repeat[0], repeat[1]);
     bumpMap.repeat.set(repeat[0], repeat[1]);
+    normalMap.repeat.set(repeat[0], repeat[1]);
     roughnessMap.repeat.set(repeat[0], repeat[1]);
     map.needsUpdate = true;
     bumpMap.needsUpdate = true;
+    normalMap.needsUpdate = true;
     roughnessMap.needsUpdate = true;
   }
 
-  return new THREE.MeshStandardMaterial({
+  const baseParams: THREE.MeshStandardMaterialParameters = {
     map,
-    bumpMap,
-    bumpScale: matParams.bumpScale ?? 0.04,
     roughnessMap,
     roughness: matParams.roughness ?? 0.72,
-    metalness: matParams.metalness ?? 0.25,
-    envMapIntensity: matParams.envMapIntensity ?? 1.15,
+    metalness: matParams.metalness ?? 0.04,
+    envMapIntensity: matParams.envMapIntensity ?? 1.15
+  };
+
+  if (hasExplicitBump) {
+    baseParams.bumpMap = bumpMap;
+    baseParams.bumpScale = matParams.bumpScale ?? 0.04;
+  } else {
+    baseParams.normalMap = normalMap;
+    baseParams.normalScale = matParams.normalScale ?? new THREE.Vector2(0.85, 0.85);
+  }
+
+  return new THREE.MeshStandardMaterial({
+    ...baseParams,
     ...matParams
   });
 }
