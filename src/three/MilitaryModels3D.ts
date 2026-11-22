@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createPBRMaterial } from './ProceduralPBRTextures.ts';
+import { applyMilitaryWearShader, MILITARY_WEAR_VARIANTS } from './SurfaceShaderKit.ts';
 
 /**
  * Real-world NATO & OpFor PBR military palette.
@@ -3954,6 +3955,10 @@ export function createGhostTower3D(defId: string): { root: THREE.Group; setValid
   return entry;
 }
 
+let cachedWearWarmGeo: THREE.BoxGeometry | null = null;
+let cachedWearWarmMat: THREE.MeshStandardMaterial | null = null;
+let cachedWearWarmMesh: THREE.Mesh | null = null;
+
 /**
  * Pre-warms all tower geometries, ghost holograms, enemy rigs, and compiles WebGL shaders at boot
  * so placing towers or spawning bosses causes 0ms frame hitch.
@@ -4064,6 +4069,16 @@ export function prewarmAllMilitaryModels(
   warmGroup.add(createMissileMesh3D('patriot'));
   warmGroup.add(createMissileMesh3D('hellfire'));
   warmGroup.add(createMissileMesh3D('boss_missile'));
+
+  // Prewarm SurfaceShaderKit military wear shader variant once at boot.
+  // Keep cached at module scope (NEVER dispose immediately after compile — Chrome KHR_parallel_shader_compile is async).
+  if (!cachedWearWarmMesh) {
+    cachedWearWarmGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    cachedWearWarmMat = new THREE.MeshStandardMaterial({ color: PALETTE.natoOlive, roughness: 0.78, metalness: 0.04 });
+    applyMilitaryWearShader(cachedWearWarmMat, { variantKey: MILITARY_WEAR_VARIANTS.ARMOR });
+    cachedWearWarmMesh = new THREE.Mesh(cachedWearWarmGeo, cachedWearWarmMat);
+  }
+  warmGroup.add(cachedWearWarmMesh);
 
   renderer.compile(scene, camera);
 

@@ -1,10 +1,26 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+
+import {
+  QualityTier,
+  ResolvedQualityConfig,
+  resolveQualityConfig,
+  applyOverridesToProfile,
+  saveQualityTier,
+  getThreeToneMapping,
+  AdaptiveQualitySampler
+} from './GraphicsQuality.ts';
+import {
+  BiomeEnvironmentHandle,
+  createBiomeEnvironment,
+  disposeBiomeEnvironmentCaches
+} from './BiomeEnvironment3D.ts';
 
 import { bus } from '../core/EventBus.js';
 import { getPBRTextures } from './ProceduralPBRTextures.ts';
@@ -398,15 +414,57 @@ export class Battlefield3D {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private renderer!: THREE.WebGLRenderer;
-  private composer!: EffectComposer;
+  private composer: EffectComposer | null = null;
+  private composerRT: THREE.WebGLRenderTarget | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
+  private smaaPass: SMAAPass | null = null;
+  private gtaoPass: GTAOPass | null = null;
+  private outputPass: OutputPass | null = null;
   private controls!: OrbitControls;
   private diorama!: DioramaHandles;
   private effects!: Effects3D;
+  private hemiLight!: THREE.HemisphereLight;
   private sunLight!: THREE.DirectionalLight;
   private rimLight!: THREE.DirectionalLight;
   private flashLights: THREE.PointLight[] = [];
   private flashLightCursor = 0;
   private flashLightTimers = [0, 0];
+
+  private biomeEnv: BiomeEnvironmentHandle | null = null;
+  private currentBiome: WorldBiome = 'desert';
+  private qualityConfig!: ResolvedQualityConfig;
+  private qualitySampler!: AdaptiveQualitySampler;
+  private useComposer = true;
+  private adaptiveEnabled = true;
+  private skipAdaptiveFrames = 0;
+  private lastEffectiveDpr = 1;
+  private lastStageVisuals: {
+    skyColor?: number;
+    fogColor?: number;
+    sunColor?: number;
+    rimColor?: number;
+    hasFogCells: boolean;
+  } = { hasFogCells: false };
+  private renderTelemetry = {
+    sceneCalls: 0,
+    totalCalls: 0,
+    sceneTriangles: 0,
+    totalTriangles: 0,
+    lines: 0,
+    points: 0
+  };
+  private readonly gtaoClipBox = new THREE.Box3(
+    new THREE.Vector3(-64, -4, -40),
+    new THREE.Vector3(64, 28, 40)
+  );
+  private panCamDir = new THREE.Vector3();
+  private panCamRight = new THREE.Vector3();
+  private panMove = new THREE.Vector3();
+  private panNextTarget = new THREE.Vector3();
+  private panActualMove = new THREE.Vector3();
+  private readonly worldUp = new THREE.Vector3(0, 1, 0);
+  private runtimeWarmMats: THREE.Material[] = [];
+  private runtimeWarmGeos: THREE.BufferGeometry[] = [];
 
   private raycaster = new THREE.Raycaster();
   private pointerNdc = new THREE.Vector2();
@@ -586,9 +644,9 @@ export class Battlefield3D {
     this.initCoopCallbacks();
     this.bindPersistenceLifecycle();
 
-    // Load saved stage & prewarm all models + compile shaders BEFORE player interaction
+    // Load saved stage & prewarm all models + runtime tower overlay shaders BEFORE player interaction
     this.loadStage(this.currentWorldId, this.currentStageId, true, initialMission);
-    this.ghostModels = prewarmAllMilitaryModels(this.scene, this.camera, this.renderer, this.ghostGroup);
+    this.ghostModels = this.prewarmAllShaders();
 
     if (initialMission) {
       this.pushRadio(
@@ -629,45 +687,70 @@ export class Battlefield3D {
     this.scene.background = new THREE.Color(0x161411);
     this.scene.fog = new THREE.FogExp2(0x1b1712, 0.0038);
 
-    this.camera = new THREE.PerspectiveCamera(42, width / height, 0.5, 520);
+    this.camera = new THREE.PerspectiveCamera(42, width / height, 0.5, 680);
     this.camera.position.set(0, 62, 74);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+
+    let rendererString = '';
+    try {
+      const gl = this.renderer.getContext();
+      const debugExt = gl.getExtension('WEBGL_debug_renderer_info');
+      rendererString = debugExt
+        ? String(gl.getParameter(debugExt.UNMASKED_RENDERER_WEBGL) || '')
+        : String(gl.getParameter(gl.RENDERER) || '');
+    } catch {
+      rendererString = '';
+    }
+
+    this.qualityConfig = resolveQualityConfig(window.location.search, {
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      rendererString,
+      gpuRenderer: rendererString
+    });
+    const hasExplicitOverrides =
+      this.qualityConfig.source === 'query' || Object.keys(this.qualityConfig.overrides).length > 0;
+    this.adaptiveEnabled = !hasExplicitOverrides;
+    this.qualitySampler = new AdaptiveQualitySampler({
+      initialTier: this.qualityConfig.tier
+    });
+
+    const profile = this.qualityConfig.profile;
+    this.lastEffectiveDpr = this.qualitySampler.getEffectiveDpr(window.devicePixelRatio || 1);
+
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(this.lastEffectiveDpr);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMapping = getThreeToneMapping(profile.toneMapMode);
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.info.autoReset = false;
     this.container.appendChild(this.renderer.domElement);
 
     getPBRTextures(this.renderer.capabilities.getMaxAnisotropy());
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    pmrem.compileEquirectangularShader();
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 1.15;
-    pmrem.dispose();
+    // Strictly constant global light topology (5 lights total, NEVER added/removed at runtime!)
+    this.hemiLight = new THREE.HemisphereLight(0x9ec0df, 0x6b563c, 0.78);
+    this.scene.add(this.hemiLight);
 
-    const hemi = new THREE.HemisphereLight(0x8bb2d6, 0x5c4a36, 0.9);
-    this.scene.add(hemi);
-
-    this.sunLight = new THREE.DirectionalLight(0xffe9c2, 2.55);
-    this.sunLight.position.set(45, 68, 38);
+    this.sunLight = new THREE.DirectionalLight(0xffe9c2, 2.35);
+    this.sunLight.position.set(46, 66, 38);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
     this.sunLight.shadow.camera.near = 10;
     this.sunLight.shadow.camera.far = 200;
-    this.sunLight.shadow.camera.left = -66;
-    this.sunLight.shadow.camera.right = 66;
-    this.sunLight.shadow.camera.top = 48;
-    this.sunLight.shadow.camera.bottom = -48;
+    this.sunLight.shadow.camera.left = -62;
+    this.sunLight.shadow.camera.right = 62;
+    this.sunLight.shadow.camera.top = 42;
+    this.sunLight.shadow.camera.bottom = -42;
     this.sunLight.shadow.bias = -0.0004;
     this.sunLight.shadow.normalBias = 0.02;
     this.scene.add(this.sunLight);
 
-    this.rimLight = new THREE.DirectionalLight(0x60a5fa, 0.85);
+    this.rimLight = new THREE.DirectionalLight(0x38bdf8, 0.72);
     this.rimLight.position.set(-48, 32, -40);
     this.scene.add(this.rimLight);
 
@@ -700,11 +783,7 @@ export class Battlefield3D {
     };
     this.resetCameraView();
 
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.45, 0.35, 0.82);
-    this.composer.addPass(bloomPass);
-    this.composer.addPass(new OutputPass());
+    this.rebuildPostProcessing(width, height);
 
     this.effects = new Effects3D(this.scene);
 
@@ -717,6 +796,406 @@ export class Battlefield3D {
 
     this.resizeObserver = new ResizeObserver(() => this.onResize());
     this.resizeObserver.observe(this.container);
+  }
+
+  private prewarmAllShaders(): Map<string, { root: THREE.Group; setValid: (valid: boolean) => void }> {
+    // Prewarm runtime tower overlay/weapon materials alongside all military models so placing
+    // 12+ diverse towers after boot triggers Δprograms = 0 (materials kept alive until destroy()
+    // so Chrome KHR_parallel_shader_compile never emits glGetProgramiv warnings).
+    const warmRuntimeGroup = new THREE.Group();
+    warmRuntimeGroup.position.set(0, -100, 0);
+
+    const ownerRingWarmMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false
+    });
+    const selectedRingWarmMat = new THREE.MeshBasicMaterial({
+      color: 0xfacc15,
+      side: THREE.DoubleSide
+    });
+    const laserLineWarmMat = new THREE.LineBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.72
+    });
+    const laserLineWarmGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, 1)
+    ]);
+    this.runtimeWarmMats.push(ownerRingWarmMat, selectedRingWarmMat, laserLineWarmMat);
+    this.runtimeWarmGeos.push(laserLineWarmGeo);
+
+    warmRuntimeGroup.add(new THREE.Mesh(this.ownerRingGeo, ownerRingWarmMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.ewPulseGeo, ownerRingWarmMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.ownerRingGeo, selectedRingWarmMat));
+    warmRuntimeGroup.add(new THREE.Line(laserLineWarmGeo, laserLineWarmMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.laserBeamGeo, this.laserBeamMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.fireZoneGeo, this.fireZoneMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.mineGeo, this.mineMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.mineGeo, this.empMineMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.shellGeo, this.shellMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.bulletGeo, this.bulletMat));
+    warmRuntimeGroup.add(new THREE.Mesh(this.ruinGeo, this.ruinMat));
+    this.scene.add(warmRuntimeGroup);
+
+    // Compile against the active composer offscreen RT when composer is enabled so RenderPass
+    // reuses 100% of compiled Linear+NoToneMapping shader programs at runtime (Δprograms = 0).
+    const prevTarget = this.renderer.getRenderTarget();
+    try {
+      if (this.useComposer && this.composer) {
+        this.renderer.setRenderTarget(this.composer.writeBuffer);
+      }
+      return prewarmAllMilitaryModels(this.scene, this.camera, this.renderer, this.ghostGroup);
+    } finally {
+      this.renderer.setRenderTarget(prevTarget);
+      this.scene.remove(warmRuntimeGroup);
+    }
+  }
+
+  private disposePostProcessing() {
+    if (this.gtaoPass) {
+      this.gtaoPass.gtaoMaterial?.dispose();
+      this.gtaoPass.blendMaterial?.dispose();
+      (this.gtaoPass as any).normalRenderTarget?.depthTexture?.dispose?.();
+      this.gtaoPass.dispose();
+      this.gtaoPass = null;
+    }
+    if (this.bloomPass) {
+      this.bloomPass.dispose();
+      this.bloomPass = null;
+    }
+    if (this.smaaPass) {
+      this.smaaPass.dispose();
+      this.smaaPass = null;
+    }
+    if (this.outputPass) {
+      this.outputPass.dispose();
+      this.outputPass = null;
+    }
+    if (this.composer) {
+      this.composer.dispose();
+      this.composer = null;
+    }
+    this.composerRT = null;
+  }
+
+  private rebuildPostProcessing(width: number, height: number) {
+    this.disposePostProcessing();
+
+    const w = Math.max(1, width);
+    const h = Math.max(1, height);
+    const profile = this.qualityConfig.profile;
+    const dpr = this.renderer.getPixelRatio();
+
+    this.renderer.toneMapping = getThreeToneMapping(profile.toneMapMode);
+
+    if (this.sunLight.shadow.mapSize.width !== profile.shadowMapSize) {
+      this.sunLight.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
+      if (this.sunLight.shadow.map) {
+        this.sunLight.shadow.map.dispose();
+        this.sunLight.shadow.map = null;
+      }
+      this.sunLight.shadow.needsUpdate = true;
+    }
+
+    this.useComposer = profile.useComposer;
+    if (!this.useComposer) {
+      return;
+    }
+
+    const maxSamples = this.renderer.capabilities.maxSamples || 0;
+    const wantMsaa = profile.aaMode === 'msaa' && profile.msaaSamples > 0 && maxSamples >= 2;
+    const samples = wantMsaa ? Math.min(profile.msaaSamples, maxSamples) : 0;
+
+    this.composerRT = new THREE.WebGLRenderTarget(w, h, {
+      type: THREE.HalfFloatType,
+      samples,
+      storeMultisampledColorBuffer: false
+    });
+    this.composer = new EffectComposer(this.renderer, this.composerRT);
+    this.composer.setPixelRatio(dpr);
+    this.composer.setSize(w, h);
+
+    const renderPass = new RenderPass(this.scene, this.camera);
+    const origRenderPass = renderPass.render.bind(renderPass);
+    const renderer = this.renderer;
+    const telemetry = this.renderTelemetry;
+    renderPass.render = function wrappedRenderPass(
+      r: THREE.WebGLRenderer,
+      writeBuffer: THREE.WebGLRenderTarget,
+      readBuffer: THREE.WebGLRenderTarget,
+      deltaTime: number,
+      maskActive: boolean
+    ) {
+      origRenderPass(r, writeBuffer, readBuffer, deltaTime, maskActive);
+      telemetry.sceneCalls = renderer.info.render.calls;
+      telemetry.sceneTriangles = renderer.info.render.triangles;
+      telemetry.lines = renderer.info.render.lines;
+      telemetry.points = renderer.info.render.points;
+    };
+    this.composer.addPass(renderPass);
+
+    if (profile.gtaoEnabled) {
+      const halfW = Math.max(1, Math.floor(w * dpr * 0.5));
+      const halfH = Math.max(1, Math.floor(h * dpr * 0.5));
+      const gtaoPass = new GTAOPass(this.scene, this.camera, halfW, halfH);
+      gtaoPass.output = GTAOPass.OUTPUT.Default;
+      gtaoPass.blendIntensity = 0.65;
+      gtaoPass.setSceneClipBox(this.gtaoClipBox);
+      gtaoPass.updateGtaoMaterial({
+        radius: 1.6,
+        distanceExponent: 1.4,
+        thickness: 1.8,
+        distanceFallOff: 1.0,
+        scale: 1.0,
+        samples: 12
+      });
+      gtaoPass.updatePdMaterial({
+        lumaPhi: 10,
+        depthPhi: 2,
+        normalPhi: 3,
+        radius: 6,
+        radiusExponent: 2,
+        rings: 2,
+        samples: 12
+      });
+      const origGtaoSetSize = gtaoPass.setSize.bind(gtaoPass);
+      gtaoPass.setSize = (sw: number, sh: number) => {
+        origGtaoSetSize(Math.max(1, Math.floor(sw * 0.5)), Math.max(1, Math.floor(sh * 0.5)));
+      };
+      this.gtaoPass = gtaoPass;
+      this.composer.addPass(gtaoPass);
+    }
+
+    if (profile.bloomEnabled && profile.bloomMode !== 'off') {
+      this.bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(w, h),
+        profile.bloomStrength,
+        profile.bloomRadius,
+        profile.bloomThreshold
+      );
+      this.composer.addPass(this.bloomPass);
+    }
+
+    const needSmaa = profile.aaMode === 'smaa' || (profile.aaMode === 'msaa' && maxSamples < 2);
+    if (needSmaa) {
+      // Three.js r187: SMAAPass takes 0 arguments and operates in linear-sRGB before OutputPass
+      this.smaaPass = new SMAAPass();
+      this.composer.addPass(this.smaaPass);
+    }
+
+    this.outputPass = new OutputPass();
+    this.composer.addPass(this.outputPass);
+    this.composer.setSize(w, h);
+  }
+
+  private applyBiomeEnvironment(
+    biome: WorldBiome,
+    skyColor?: number,
+    fogColor?: number,
+    sunColor?: number,
+    rimColor?: number,
+    hasFogCells = false
+  ) {
+    this.currentBiome = biome;
+    this.lastStageVisuals.skyColor = skyColor;
+    this.lastStageVisuals.fogColor = fogColor;
+    this.lastStageVisuals.sunColor = sunColor;
+    this.lastStageVisuals.rimColor = rimColor;
+    this.lastStageVisuals.hasFogCells = hasFogCells;
+
+    // Dispose previous PMREM cube RT + skyDome BEFORE building next (0 leaks across 20 stages)
+    if (this.biomeEnv) {
+      this.biomeEnv.dispose();
+      this.biomeEnv = null;
+    }
+
+    const profile = this.qualityConfig.profile;
+    const handle = createBiomeEnvironment(this.renderer, biome, {
+      iblMode: profile.iblMode,
+      envEnabled: profile.envEnabled,
+      skyColorOverride: skyColor,
+      fogColorOverride: fogColor,
+      sunColorOverride: sunColor,
+      rimColorOverride: rimColor
+    });
+    this.biomeEnv = handle;
+    const spec = handle.lighting;
+
+    this.scene.add(handle.skyDome);
+    this.scene.environment = handle.envMap;
+    this.scene.environmentIntensity = profile.envEnabled ? spec.envIntensity : 0;
+
+    if (this.scene.background instanceof THREE.Color) {
+      this.scene.background.setHex(spec.skyColor);
+    } else {
+      this.scene.background = new THREE.Color(spec.skyColor);
+    }
+
+    const baseFogDensity = hasFogCells ? 0.0046 : spec.fogDensity;
+    const effectiveFogDensity = this.computeEffectiveFogDensity(baseFogDensity);
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.color.setHex(spec.fogColor);
+      this.scene.fog.density = effectiveFogDensity;
+    } else {
+      this.scene.fog = new THREE.FogExp2(spec.fogColor, effectiveFogDensity);
+    }
+
+    // Update persistent lights IN-PLACE (light count remains strictly constant)
+    this.hemiLight.color.setHex(spec.hemiSkyColor);
+    this.hemiLight.groundColor.setHex(spec.hemiGroundColor);
+    this.hemiLight.intensity = profile.envEnabled ? spec.hemiIntensity : spec.hemiIntensity * 1.18;
+
+    this.sunLight.color.setHex(spec.sunColor);
+    this.sunLight.intensity = spec.sunIntensity;
+    this.sunLight.position.set(spec.sunPosition[0], spec.sunPosition[1], spec.sunPosition[2]);
+
+    this.rimLight.color.setHex(spec.rimColor);
+    this.rimLight.intensity = spec.rimIntensity;
+    this.rimLight.position.set(spec.rimPosition[0], spec.rimPosition[1], spec.rimPosition[2]);
+
+    this.renderer.toneMapping = getThreeToneMapping(profile.toneMapMode);
+    this.renderer.toneMappingExposure = spec.exposure;
+  }
+
+  private computePortraitDistance(aspect: number, fovDeg: number): number {
+    const vFovRad = THREE.MathUtils.degToRad(fovDeg);
+    const tanHalfH = Math.tan(vFovRad * 0.5) * Math.max(0.45, aspect);
+    const elevRad = THREE.MathUtils.degToRad(54);
+    // Keep full 112x64 board + plinth/Spawns/FOB margins (±58u at front z=+33u) unclipped
+    return 58.0 / tanHalfH + 33.0 * Math.cos(elevRad);
+  }
+
+  private computeEffectiveFogDensity(baseDensity: number): number {
+    const w = this.container.clientWidth || window.innerWidth || 1000;
+    const h = this.container.clientHeight || window.innerHeight || 640;
+    const aspect = w / Math.max(1, h);
+    if (aspect < 1.0) {
+      const dist = this.computePortraitDistance(aspect, this.camera ? this.camera.fov : 62);
+      return baseDensity * Math.min(1.0, 100.0 / Math.max(100.0, dist));
+    }
+    return baseDensity;
+  }
+
+  private applyEffectiveDpr(dpr: number) {
+    if (Math.abs(dpr - this.lastEffectiveDpr) < 0.005) return;
+    this.lastEffectiveDpr = dpr;
+    const w = this.container.clientWidth || window.innerWidth || 1000;
+    const h = this.container.clientHeight || window.innerHeight || 640;
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.setSize(w, h);
+    if (this.composer) {
+      this.composer.setPixelRatio(dpr);
+      this.composer.setSize(w, h);
+    }
+  }
+
+  setQualityTier(tier: QualityTier, persist = true) {
+    const nextProfile = applyOverridesToProfile(tier, this.qualityConfig.overrides);
+    this.qualityConfig = {
+      ...this.qualityConfig,
+      tier,
+      profile: nextProfile
+    };
+    if (persist) {
+      saveQualityTier(tier);
+    }
+    this.qualitySampler.reset(tier);
+    this.skipAdaptiveFrames = 4;
+
+    const w = this.container.clientWidth || window.innerWidth || 1000;
+    const h = this.container.clientHeight || window.innerHeight || 640;
+    const nextDpr = this.qualitySampler.getEffectiveDpr(window.devicePixelRatio || 1);
+    this.lastEffectiveDpr = nextDpr;
+    this.renderer.setPixelRatio(nextDpr);
+    this.renderer.setSize(w, h);
+
+    this.rebuildPostProcessing(w, h);
+    this.applyBiomeEnvironment(
+      this.currentBiome,
+      this.lastStageVisuals.skyColor,
+      this.lastStageVisuals.fogColor,
+      this.lastStageVisuals.sunColor,
+      this.lastStageVisuals.rimColor,
+      this.lastStageVisuals.hasFogCells
+    );
+  }
+
+  getVisualPipelineInfo() {
+    const profile = this.qualityConfig.profile;
+    const composerSamples = this.composer?.renderTarget1?.samples ?? 0;
+    let aaMode = 'OFF (samples=0)';
+    if (!this.useComposer) {
+      aaMode = 'Native MSAA';
+    } else if (composerSamples > 0) {
+      aaMode = `MSAA ${composerSamples}x`;
+    } else if (this.smaaPass) {
+      aaMode = 'SMAA';
+    }
+
+    const iblMode = !profile.envEnabled
+      ? 'OFF'
+      : profile.iblMode === 'room'
+        ? 'RoomEnv'
+        : 'BiomePMREM';
+
+    const bloomMode =
+      !this.useComposer || !this.bloomPass || !profile.bloomEnabled || profile.bloomMode === 'off'
+        ? 'OFF'
+        : profile.bloomMode === 'legacy'
+          ? `Legacy(${profile.bloomThreshold})`
+          : `HDR(${profile.bloomThreshold})`;
+
+    return {
+      qualityTier: this.qualityConfig.tier,
+      qualitySource: this.qualityConfig.source,
+      useComposer: this.useComposer,
+      aaMode,
+      composerSamples,
+      toneMappingMode: profile.toneMapMode,
+      toneMappingCode: this.renderer.toneMapping,
+      toneMappingExposure: this.renderer.toneMappingExposure,
+      iblMode,
+      envIntensity: this.scene.environmentIntensity,
+      bloomMode,
+      bloomThreshold: this.bloomPass ? this.bloomPass.threshold : null,
+      bloomStrength: this.bloomPass ? this.bloomPass.strength : null,
+      gtaoEnabled: Boolean(this.useComposer && this.gtaoPass),
+      shadowMapSize: this.sunLight.shadow.mapSize.width,
+      effectiveDpr: this.renderer.getPixelRatio(),
+      lightCount: 5
+    };
+  }
+
+  getRenderTelemetry() {
+    return {
+      sceneCalls: this.renderTelemetry.sceneCalls,
+      totalCalls: this.renderTelemetry.totalCalls,
+      sceneTriangles: this.renderTelemetry.sceneTriangles,
+      totalTriangles: this.renderTelemetry.totalTriangles,
+      lines: this.renderTelemetry.lines,
+      points: this.renderTelemetry.points
+    };
+  }
+
+  private renderFrame() {
+    this.renderer.info.reset();
+    if (this.useComposer && this.composer) {
+      this.composer.render();
+      this.renderTelemetry.totalCalls = this.renderer.info.render.calls;
+      this.renderTelemetry.totalTriangles = this.renderer.info.render.triangles;
+    } else {
+      this.renderer.render(this.scene, this.camera);
+      this.renderTelemetry.sceneCalls = this.renderer.info.render.calls;
+      this.renderTelemetry.totalCalls = this.renderTelemetry.sceneCalls;
+      this.renderTelemetry.sceneTriangles = this.renderer.info.render.triangles;
+      this.renderTelemetry.totalTriangles = this.renderTelemetry.sceneTriangles;
+      this.renderTelemetry.lines = this.renderer.info.render.lines;
+      this.renderTelemetry.points = this.renderer.info.render.points;
+    }
   }
 
   private triggerFlashLight(wx: number, wy: number, wz: number, color: number, intensity = 5.0, duration = 0.07) {
@@ -732,11 +1211,17 @@ export class Battlefield3D {
   private applyResponsiveCameraFov(w: number, h: number) {
     const aspect = w / Math.max(1, h);
     if (aspect < 1.0) {
-      this.camera.fov = Math.min(68, Math.max(42, Math.round(52 / Math.max(0.55, aspect))));
+      this.camera.fov = 62;
+      if (this.controls) {
+        const reqDist = this.computePortraitDistance(aspect, this.camera.fov);
+        this.controls.maxDistance = Math.max(210, Math.ceil(reqDist * 1.2));
+      }
     } else if (aspect < 1.35) {
       this.camera.fov = 48;
+      if (this.controls) this.controls.maxDistance = 210;
     } else {
       this.camera.fov = 42;
+      if (this.controls) this.controls.maxDistance = 210;
     }
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
@@ -747,12 +1232,14 @@ export class Battlefield3D {
     const h = this.container.clientHeight || window.innerHeight || 640;
     const aspect = w / Math.max(1, h);
     this.controls.target.set(0, 0, 0);
+    this.applyResponsiveCameraFov(w, h);
     if (aspect < 1.0) {
-      this.camera.position.set(0, 78, 92);
+      const dist = this.computePortraitDistance(aspect, this.camera.fov);
+      const elevRad = THREE.MathUtils.degToRad(54);
+      this.camera.position.set(0, dist * Math.sin(elevRad), dist * Math.cos(elevRad));
     } else {
       this.camera.position.set(0, 62, 74);
     }
-    this.applyResponsiveCameraFov(w, h);
     this.controls.update();
   }
 
@@ -761,8 +1248,18 @@ export class Battlefield3D {
     const h = this.container.clientHeight;
     if (w <= 0 || h <= 0) return;
     this.applyResponsiveCameraFov(w, h);
+    const dpr = this.qualitySampler.getEffectiveDpr(window.devicePixelRatio || 1);
+    this.lastEffectiveDpr = dpr;
+    this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h);
-    this.composer.setSize(w, h);
+    if (this.composer) {
+      this.composer.setPixelRatio(dpr);
+      this.composer.setSize(w, h);
+    }
+    if (this.biomeEnv && this.scene.fog instanceof THREE.FogExp2) {
+      const baseDensity = this.lastStageVisuals.hasFogCells ? 0.0046 : this.biomeEnv.lighting.fogDensity;
+      this.scene.fog.density = this.computeEffectiveFogDensity(baseDensity);
+    }
   }
 
   private initSimulation() {
@@ -2305,14 +2802,14 @@ export class Battlefield3D {
     );
     this.scene.add(this.diorama.group);
 
+    const stageBiome = (this.stageConfig.biome || this.worldConfig.biome) as WorldBiome;
     const skyColor = this.stageConfig.skyColor ?? this.worldConfig.skyColor;
     const fogColor = this.stageConfig.fogColor ?? this.worldConfig.fogColor;
     const sunColor = this.stageConfig.sunColor ?? this.worldConfig.sunColor;
     const rimColor = this.stageConfig.rimColor ?? this.worldConfig.rimColor;
-    this.scene.background = new THREE.Color(skyColor);
-    this.scene.fog = new THREE.FogExp2(fogColor, this.stageConfig.fogCells?.length ? 0.0046 : 0.0038);
-    this.sunLight.color.setHex(sunColor);
-    this.rimLight.color.setHex(rimColor);
+    const hasFogCells = Boolean(this.stageConfig.fogCells?.length);
+    this.applyBiomeEnvironment(stageBiome, skyColor, fogColor, sunColor, rimColor, hasFogCells);
+    this.skipAdaptiveFrames = 3;
 
     const startingBudget = this.stageConfig.startingBudget || 750;
     const localPlayer = multiplayer.isActive() ? multiplayer.getLocalPlayer() : null;
@@ -3701,7 +4198,7 @@ export class Battlefield3D {
     if (this.hitStopTimer > 0) {
       this.hitStopTimer -= realDt;
       this.updateCameraShake(realDt);
-      this.composer.render();
+      this.renderFrame();
       return;
     }
 
@@ -3783,7 +4280,22 @@ export class Battlefield3D {
     this.updateInteractiveOverlays();
     this.updateProjectedDomBars();
     this.updateCameraShake(realDt);
-    this.composer.render();
+    this.renderFrame();
+
+    if (this.adaptiveEnabled) {
+      if (this.skipAdaptiveFrames > 0) {
+        this.skipAdaptiveFrames--;
+      } else {
+        const decision = this.qualitySampler.recordFrame(rawDelta * 1000, realDt);
+        if (decision.changed) {
+          if (decision.action === 'tier_down') {
+            this.setQualityTier(decision.tier, this.qualityConfig.source === 'auto');
+          } else if (decision.action === 'dpr_down' || decision.action === 'dpr_up') {
+            this.applyEffectiveDpr(this.qualitySampler.getEffectiveDpr(window.devicePixelRatio || 1));
+          }
+        }
+      }
+    }
 
     if (multiplayer.isHost()) {
       this.snapshotAccum += realDt;
@@ -3823,23 +4335,23 @@ export class Battlefield3D {
     if (forward === 0 && right === 0) return;
 
     const panSpeed = 46 * realDt;
-    const camDir = new THREE.Vector3();
-    this.camera.getWorldDirection(camDir);
-    camDir.y = 0;
-    camDir.normalize();
-    const camRight = new THREE.Vector3().crossVectors(camDir, new THREE.Vector3(0, 1, 0)).normalize();
+    this.camera.getWorldDirection(this.panCamDir);
+    this.panCamDir.y = 0;
+    this.panCamDir.normalize();
+    this.panCamRight.crossVectors(this.panCamDir, this.worldUp).normalize();
 
-    const move = new THREE.Vector3()
-      .addScaledVector(camDir, forward * panSpeed)
-      .addScaledVector(camRight, right * panSpeed);
+    this.panMove
+      .set(0, 0, 0)
+      .addScaledVector(this.panCamDir, forward * panSpeed)
+      .addScaledVector(this.panCamRight, right * panSpeed);
 
-    const nextTarget = this.controls.target.clone().add(move);
-    nextTarget.x = THREE.MathUtils.clamp(nextTarget.x, -BOARD_W * 0.55, BOARD_W * 0.55);
-    nextTarget.z = THREE.MathUtils.clamp(nextTarget.z, -BOARD_D * 0.55, BOARD_D * 0.55);
-    const actualMove = nextTarget.clone().sub(this.controls.target);
+    this.panNextTarget.copy(this.controls.target).add(this.panMove);
+    this.panNextTarget.x = THREE.MathUtils.clamp(this.panNextTarget.x, -BOARD_W * 0.55, BOARD_W * 0.55);
+    this.panNextTarget.z = THREE.MathUtils.clamp(this.panNextTarget.z, -BOARD_D * 0.55, BOARD_D * 0.55);
+    this.panActualMove.copy(this.panNextTarget).sub(this.controls.target);
 
-    this.controls.target.copy(nextTarget);
-    this.camera.position.add(actualMove);
+    this.controls.target.copy(this.panNextTarget);
+    this.camera.position.add(this.panActualMove);
   }
 
   private updateWaveState(dt: number) {
@@ -7246,6 +7758,16 @@ export class Battlefield3D {
     for (const unsub of this.coopUnsubs) unsub();
     this.clearCoopVisuals();
     if (this.diorama) this.diorama.dispose();
+    if (this.biomeEnv) {
+      this.biomeEnv.dispose();
+      this.biomeEnv = null;
+    }
+    disposeBiomeEnvironmentCaches(this.renderer);
+    for (const m of this.runtimeWarmMats) m.dispose();
+    for (const g of this.runtimeWarmGeos) g.dispose();
+    this.runtimeWarmMats = [];
+    this.runtimeWarmGeos = [];
+    this.disposePostProcessing();
     this.controls.dispose();
     this.renderer.dispose();
     this.overlayEl.remove();
