@@ -4541,8 +4541,9 @@ export class Battlefield3D {
         }
         if (tower.rig.ewRings) {
           tower.rig.ewRings.forEach((ring, idx) => {
-            const phase = (this.elapsedReal * 1.4 + idx * 0.5) % 1;
-            ring.scale.setScalar(0.75 + phase * 1.35);
+            const phase = (this.elapsedReal * 1.1 + idx * 0.5) % 1;
+            const pulse = 0.96 + Math.sin(phase * Math.PI * 2) * 0.05;
+            ring.scale.setScalar(pulse);
           });
         }
         if (tower.ewPulseMesh) {

@@ -2,9 +2,9 @@
 
 > **Projeto:** DEFCON: Frontline (`defcon-frontline`) — Tower Defense Militar 3D em Three.js r187 + Vite 7  
 > **Documento:** `docs/designs/VISUAL_OVERHAUL.md` (Logbook Persistente — Fonte de Verdade das Fases 0 a 6)  
-> **Data da Auditoria Fase 0:** 2026-11-21 | **Commits Aprovados:** F0 `eaff7f2` (`GATE G0`) · F1 `9d6eaf1` (`GATE G1`)  
-> **Estado Atual:** 🟡 **FASE 2 CONCLUÍDA — VERTICAL SLICE APROVADO (90,1 / 100) — AGUARDANDO GATE G2**  
-> **Scorecard Independente (`reviewer-f2b`, `#68`):** **Baseline F0 `40,0` → Pós-F1 `65,3` → Pré-Polish F2 `78,3` → Pós-Polish F2 `90,1 / 100` ✅ (`Δ F1→F2: +24,8 pts`, `0 P0`, `0 P1`, 10/10 critérios ≥ 87% do peso)**.
+> **Data da Auditoria Fase 0:** 2026-11-21 | **Commits Aprovados:** F0 `eaff7f2` (`GATE G0`) · F1 `9d6eaf1` (`GATE G1`) · F2 `79f1f1a` (`GATE G2`)  
+> **Estado Atual:** 🟡 **FASE 3 CONCLUÍDA — 23/23 TORRES REMODELADAS & APROVADAS (`90,5 / 100`) — AGUARDANDO GATE G3**  
+> **Scorecard Independente (`reviewer-f3b`, `#93`):** **F0 `40,0` → F1 `65,3` → F2 `90,1` → Pré-Polish F3 `85,6` → Pós-Polish F3 `90,5 / 100` ✅ (`0 P0`, `0 P1`, 10/10 critérios ≥ 86% do peso)**.
 
 ---
 
@@ -19,11 +19,14 @@ Este documento funciona simultaneamente como **pacote de decisão dos GATES (G0 
   2. **Kits de Fundação (`src/three/`):** `GraphicsQuality.ts` (4 presets + `AdaptiveQualitySampler` + auto-detecção Intel UHD 630 → `medium` + overrides A/B), `BiomeEnvironment3D.ts` (IBL externo procedural via `PMREMGenerator` + `skyDome` nos 7 biomas preservando cores de `worlds.js`), `MilitaryGeometryKit.ts` (chanfros, `mergeStaticGeometries`, `createGhostEdges`, `createContactShadowMesh`, vertical AO) e `SurfaceShaderKit.ts` (normais Sobel 3×3 + `applyMilitaryWearShader` com `customProgramCacheKey` determinístico).
   3. **Pipeline Global (`Battlefield3D.ts`):** `EffectComposer` com MSAA (`samples: 4` no High/Ultra, `samples: 2` no Medium, fallback `SMAAPass()` 0-arg antes de `OutputPass`, render direto nativo no Low), `AgXToneMapping`, `UnrealBloomPass` HDR seletivo (`1.14 / 0.28 / 0.38`), `GTAOPass` no Ultra, cura de 100% do white-out ártico (`55,3% → 0,00%`), e enquadramento Mobile Portrait (`390×844`, `19,9 → 59,5 FPS`).
   4. **Auditoria Independente (`reviewer-f1`):** Nota evoluiu de **`40,0 / 100` (Pré-F1) → `65,3 / 100` (Pós-F1)** (`+25,3 pts`).
-- **Fase 2 (Vertical Slice: 5 Torres Hero `howitzer, patriot, tesla_tower, phalanx, ew_crew` + Mapa `1-1` Deserto — 🟡 CONCLUÍDA E APROVADA COM `90,1 / 100` ✅, AGUARDANDO GATE G2):**
-  1. **Terreno Macro+Detail Splatting `64 px/u` & Props `InstancedMesh` (`TerrainSplatting3D.ts`, `TerrainDiorama3D.ts`):** Fim das 520 "bolotas" `ctx.arc()`; splatmap RGBA `512×292` FBM + detail maps tileable `512×512` a `64 px/u` + decalque de estrada `2048×1170` com junções em T suaves; micro-relevo com células `FREE`/`ROAD` estritamente em `y = 0` e proxy `groundPlane.visible = false` com raycast 100% funcional; 3 variantes assimétricas de mesas rochosas estratificadas com saia de cascalho/AO + props em `InstancedMesh`; Spawn Helipads e FOB HQ heróis redesenhados (cone de luz com fade suave sem elipse dura e sem vazamento à direita). Draw calls de `1-1` vazio caíram de **`295 → 78` (`56` pós-ciclo, `-81%`)** a **`59,2 FPS`**.
-  2. **5 Torres Hero Remodeladas + PBR Sem Costuras (`MilitaryModels3D.ts`, `ProceduralPBRTextures.ts`, `Battlefield3D.ts`):** `howitzer`, `patriot`, `tesla_tower`, `phalanx` e `ew_crew` reconstruídas com chanfros/bevels, `mergeStaticGeometries`, `normalMap` Sobel contínuo (sem grade quadriculada), `metalness ≤ 0.05` em tintas CARC, evolução distinta `nv1 → nv2-3 → nv4+ → 5A / 6B`, `missileCaps` batcheados em 1 mesh `noShadow` (`patriot Lv4` **`-67%` calls**), `radarPivots` girando em runtime (`patriot` e `ew_crew`), `ownerRingMesh` em `y = 0.035` (`r = 1.90..1.99`) sem clipping, e ghost preview `EdgesGeometry` daltônico-safe (`0x38bdf8` ciano válido / `0xf97316` laranja bloqueado) em **`5` scene calls**.
-  3. **Iteração de Polish 2E & Auditoria Independente (`reviewer-f2` → `reviewer-f2b`):** A 1ª auditoria (`reviewer-f2`) pontuou **`78,3 / 100`** apontando 5 P1s; todos os 5 P1s foram corrigidos na Etapa 2E e re-auditados por **`reviewer-f2b` (#68)** com contexto limpo, atingindo **`90,1 / 100` ✅ (`0 P0`, `0 P1`, 10/10 critérios ≥ 87%)**. `npm test`: **`26/26 PASS`**; `npm run build`: **`PASS`** (`0` dev leaks em `dist/`); ciclo de 20 fases: **`Δgeo = 0, Δtex = 0, Δprog = 0, lights = 5`**; **`Δprograms = 0`** em todos os upgrades. Veja a **Seção 14**.
-- **Próximo passo após aprovação do GATE G2:** Travar a **Art Bible (§5)**, fazer commit local da Fase 2 e iniciar a **Fase 3 (Produção em Escala das Restantes 18 Torres nos 6 Estados → GATE G3)**.
+- **Fase 2 (Vertical Slice: 5 Torres Hero `howitzer, patriot, tesla_tower, phalanx, ew_crew` + Mapa `1-1` Deserto — ✅ APROVADA NO GATE G2, commit `79f1f1a`):**
+  1. **Terreno Macro+Detail Splatting `64 px/u` & Props `InstancedMesh` (`TerrainSplatting3D.ts`, `TerrainDiorama3D.ts`):** Fim das 520 "bolotas" `ctx.arc()`; splatmap RGBA `512×292` FBM + detail maps tileable `512×512` a `64 px/u` + decalque de estrada `2048×1170`; micro-relevo com `FREE`/`ROAD` em `y = 0` e proxy `groundPlane.visible = false`; 3 mesas rochosas assimétricas + Spawn/FOB heróis (`1-1` vazio `295 → 78` / `56` pós-ciclo).
+  2. **5 Torres Hero Remodeladas (`MilitaryModels3D.ts`, `ProceduralPBRTextures.ts`, `Battlefield3D.ts`):** Chanfros, `mergeStaticGeometries`, `normalMap` Sobel contínuo, `metalness ≤ 0.05` em CARC, `5A/6B` distintos, `ownerRingMesh` sem clipping e ghost ciano/laranja em `5` calls (`reviewer-f2b` #68: **`90,1 / 100` ✅**).
+- **Fase 3 (Produção em Escala: Restantes 18 Torres nos 6 Estados — 🟡 CONCLUÍDA E APROVADA COM `90,5 / 100` ✅, AGUARDANDO GATE G3):**
+  1. **Arquitetura Modular (`TowerRigPrimitives.ts` + `src/three/towers/*.ts`):** Primitivas/materiais compartilhados extraídos para `TowerRigPrimitives.ts` e as 18 torres restantes implementadas em 4 módulos (`LegacyAndPrecisionTowers3D.ts`, `AreaAndMissileTowers3D.ts`, `ElementalTowers3D.ts`, `SupportTowers3D.ts`), integradas em `MilitaryModels3D.ts` (com remoção do `specRing`/`crownRing` legado, zero `addBox`/`addCyl` em torres, e `tests/visual-towers23.test.mjs` **31/31 PASS**).
+  2. **Métricas da Frota 23/23 & Performance:** Gallery `nv1` caiu de **`971 → 479` sceneCalls (`-50,7%` vs F1)**; `maxRLow ≤ 1.84`; `max tris = 3.710` (`howitzer@5A`, todas as 18 novas `≤ 3.414`); emissivo `bright(>=1.0) ≤ 1,46%` e `activeNonMetallic ≤ 3,30%` (meta `≤ 5%`); `1-1` Ultra com 7 torres `5A` em `279 sceneCalls / 559 fullCalls`; `low 59,9 FPS` / `medium 58,8 FPS p50`; `Δprograms = 0` em colocação/upgrades; ciclo 20 fases `Δgeo=0 / Δtex=0 / Δprog=0`; `0` console errors/warnings; `0` dev leaks em `dist/`.
+  3. **Auditoria & Polish (`reviewer-f3` `85,6` → Stage 3E → `reviewer-f3b` `90,5 / 100` ✅):** 3 P1s corrigidos (`ewRings` contidos em `[0.91, 1.01]` fora das estruturas, cunhas frontais do `abrams_pit` sem interpenetração, escudo/braços `ballista 5A`) + 4 P2s (`tos1_mlrs` fosco, `steel`/`diamondPlate` sem hotspot, `harpoon_tower 5A` `specTrimA`, `sniper_tower` X-bracing). Veja a **Seção 15**.
+- **Próximo passo após aprovação do GATE G3:** Fazer commit local da Fase 3 e iniciar a **Fase 4 (Restantes 6 Biomas / 19 Fases `1-2`..`4-5`, Células Especiais 3D, Props `InstancedMesh` + Cache `loadStage ≤ 120 ms` → GATE G4)**.
 
 ---
 
@@ -334,33 +337,35 @@ O conjunto inicial `{howitzer, patriot, tesla_tower}` deixa **2 contratos ativos
 
 Legenda de status: `⬜` Pendente | `🔄` Em andamento | `✅` Aprovado em revisão | `N/A` Não aplicável.
 
-### 10.1 Cobertura das 23 Torres (`src/data/towers.js` + `src/three/MilitaryModels3D.ts`)
+### 10.1 Cobertura das 23 Torres (`src/data/towers.js` + `src/three/MilitaryModels3D.ts`) — **23/23 ✅ (Fase 3)**
+
+> **Resumo da Frota (`tests/visual-towers23.test.mjs`, `31/31 PASS`):** **23/23 torres** remodeladas com zero `addBox`/`addCyl` e `StaticMeshBatcher` (`maxRLow ≤ 1.84`, ghost `5` scene calls `0x38bdf8`/`0xf97316`, `max tris = 3.710` em `howitzer@5A` e todas as 18 torres da Fase 3 `≤ 3.414`, `max bright(>=1.0) emissivo = 1,46%` em `energy_extractor@nv4` e `activeNonMetallic ≤ 3,30%` em `ew_crew@5A`).
 
 | # | `defId` | Nome (`towers.js`) | Categoria | `nv1` | `nv2-3` | `nv4+` | `5A` | `6B` | `ghost` | Nota Revisor |
 |---:|---|---|---|:---:|:---:|:---:|:---:|:---:|:---:|---|
-| 01 | `ballista` | Balestra de Precisão | `precision` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 02 | `m2_bunker` | Metralhadora | `precision` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 03 | `abrams_pit` | Canhão Pesado | `area` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| 01 | `ballista` | Balestra de Precisão | `precision` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 02 | `m2_bunker` | Metralhadora | `precision` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 03 | `abrams_pit` | Canhão Pesado | `area` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
 | 04 | `howitzer` | Morteiro | `area` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,1/100` *(Slice F2 — `reviewer-f2b` #68)* |
-| 05 | `sniper_tower` | Torre de Franco-atirador | `precision` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 06 | `cryo_tower` | Torre Criogênica | `elemental` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| 05 | `sniper_tower` | Torre de Franco-atirador | `precision` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 06 | `cryo_tower` | Torre Criogênica | `elemental` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
 | 07 | `tesla_tower` | Torre Tesla | `elemental` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,1/100` *(Slice F2 — `reviewer-f2b` #68)* |
-| 08 | `toxic_tower` | Torre Tóxica | `elemental` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 09 | `flamethrower` | Lança-chamas | `elemental` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 10 | `helios_laser` | Emissor Laser | `elemental` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 11 | `railgun` | Canhão Railgun | `precision` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| 08 | `toxic_tower` | Torre Tóxica | `elemental` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 09 | `flamethrower` | Lança-chamas | `elemental` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 10 | `helios_laser` | Emissor Laser | `elemental` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 11 | `railgun` | Canhão Railgun | `precision` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
 | 12 | `patriot` | Lançador de Mísseis AA | `elemental` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,1/100` *(Slice F2 — `reviewer-f2b` #68)* |
 | 13 | `phalanx` | Canhão Antiaéreo Flak | `elemental` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,1/100` *(Slice F2 — `reviewer-f2b` #68)* |
-| 14 | `harpoon_tower` | Torre de Arpões | `support` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 15 | `tos1_mlrs` | Bateria de Foguetes | `area` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 16 | `minefield` | Campo Minado | `area` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
+| 14 | `harpoon_tower` | Torre de Arpões | `support` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 15 | `tos1_mlrs` | Bateria de Foguetes | `area` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 16 | `minefield` | Campo Minado | `area` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
 | 17 | `ew_crew` | Radar Tático | `support` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,1/100` *(Slice F2 — `reviewer-f2b` #68)* |
-| 18 | `eng_workshop` | Oficina de Engenharia | `support` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 19 | `iron_dome` | Gerador de Escudos | `support` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | *(Slice F2 Op. B)* |
-| 20 | `energy_extractor` | Extrator de Energia | `support` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 21 | `bushmaster` | M242 Bushmaster 25mm *(legada)* | `precision` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 22 | `javelin` | TOW / FGM-148 Javelin *(legada)* | `area` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | — |
-| 23 | `hesco` | Hesco Bastion *(legada)* | `support` | ⬜ | `N/A` | `N/A` | `N/A` | `N/A` | ⬜ | 1 nível (`isBarrier`) |
+| 18 | `eng_workshop` | Oficina de Engenharia | `support` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 19 | `iron_dome` | Gerador de Escudos | `support` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 20 | `energy_extractor` | Extrator de Energia | `support` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 21 | `bushmaster` | M242 Bushmaster 25mm *(legada)* | `precision` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 22 | `javelin` | TOW / FGM-148 Javelin *(legada)* | `area` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
+| 23 | `hesco` | Hesco Bastion *(legada)* | `support` | ✅ | `N/A` | `N/A` | `N/A` | `N/A` | ✅ | ✅ `90,5/100` *(1 nível `isBarrier`)* |
 
 ### 10.2 Cobertura dos 7 Biomas × 20 Fases (`src/data/worlds.js`)
 
@@ -389,21 +394,21 @@ Legenda de status: `⬜` Pendente | `🔄` Em andamento | `✅` Aprovado em revi
 
 ### 10.3 Scorecard de Referência (Seção 8.3 — 100 Pontos, Gates G1 a G6)
 
-> **Critério de Aprovação AAA:** **≥ 90 / 100 pontos** e **nenhum critério individual abaixo de 80% do seu peso** (além de `0` defeitos P0 e 100% da matriz `✅`). Notas atribuídas pelos **revisores independentes (`reviewer-f1` #38, `reviewer-f2` #62 e `reviewer-f2b` #68)** com contexto limpo.
+> **Critério de Aprovação AAA:** **≥ 90 / 100 pontos** e **nenhum critério individual abaixo de 80% do seu peso** (além de `0` defeitos P0 e 100% da matriz `✅`). Notas atribuídas pelos **revisores independentes (`reviewer-f1` #38, `reviewer-f2` #62, `reviewer-f2b` #68, `reviewer-f3` #89 e `reviewer-f3b` #93)** com contexto limpo.
 
-| Critério (Seção 8.3) | Peso | Piso Mínimo (80%) | O que é Avaliado | Baseline (Pré-F1) | Pós-Fase 1 (`reviewer-f1`) | Pré-2E F2 (`reviewer-f2`) | **Pós-Fase 2 Vertical Slice (`reviewer-f2b`, #68)** | Δ (F1→F2) |
-|---|---:|---:|---|---:|---:|---:|---:|---:|
-| **1. Silhueta e leitura em 1 s** | 15 pts | 12,0 pts | Distinção imediata de cada categoria/torre a `90–210u`, proporção clara e separação figura-fundo. | 7,5 / 15 | 9,5 / 15 | 12,2 / 15 | **13,8 / 15** ✅ | +4,3 |
-| **2. Forma (bisel, proporção, hierarquia 3 níveis)** | 10 pts | 8,0 pts | Chanfros/bevels captando especular, subconjuntos mecânicos coerentes e leitura Macro/Meso/Micro (`210u / 90u / 24u`). | 4,0 / 10 | 4,5 / 10 | 7,3 / 10 | **8,9 / 10** ✅ | +4,4 |
-| **3. Materiais PBR corretos e coerentes** | 10 pts | 8,0 pts | Dielétricos `metalness ≤ 0.05`, `normalMap` Sobel + ORM, desgaste/sujeira e densidade de texel ≤ `2×` (`64–128 px/u`). | 4,0 / 10 | 5,5 / 10 | 7,0 / 10 | **9,0 / 10** ✅ | +3,5 |
-| **4. Progressão de tier/especialização** | 10 pts | 8,0 pts | Evolução clara `nv1 → nv2-3 → nv4+ → 5A / 6B` + ghost limpo (`EdgesGeometry`) e `ownerRingMesh` sem clipping. | 4,5 / 10 | 4,5 / 10 | 6,5 / 10 | **9,2 / 10** ✅ | +4,7 |
-| **5. Luz, sombra e oclusão** | 10 pts | 8,0 pts | IBL externo por bioma, `AgX`, sombras `PCFShadowMap` sem acne/clipping, AO de contato ancorando bases e bloom 100% seletivo. | 3,5 / 10 | 8,0 / 10 ✅ | 8,4 / 10 | **9,0 / 10** ✅ | +1,0 |
-| **6. Terreno e composição do mapa** | 10 pts | 8,0 pts | Splatting + detail `64 px/u` (zero "bolotas"), micro-relevo natural, estradas/bermas nítidas, props enraizados e Spawn/FOB herói. | 3,5 / 10 | 4,0 / 10 | 8,2 / 10 | **9,0 / 10** ✅ | +5,0 |
-| **7. Identidade de bioma e atmosfera** | 10 pts | 8,0 pts | 7 biomas distintos preservando cores de `worlds.js`, zero white-out ártico, skydome/neblina coerentes e superfícies especiais convincentes. | 3,0 / 10 | 7,8 / 10 | 8,4 / 10 | **8,8 / 10** ✅ | +1,0 |
-| **8. Legibilidade tática** | 10 pts | 8,0 pts | Contraste inimigos vs terreno ≥ `3:1` em grayscale, células especiais inequívocas, acessibilidade daltônico-safe, emissivo ≤ 5%, zero strobe > 3 Hz. | 4,0 / 10 | 8,2 / 10 ✅ | 8,3 / 10 | **9,1 / 10** ✅ | +0,9 |
-| **9. Imagem limpa (AA, cintilação, z-fighting)** | 5 pts | 4,0 pts | MSAA/SMAA limpo no zoom 400%, zero z-fighting, zero shimmer de mipmap/aliasing em diagonais e linhas de rota. | 1,5 / 5 | 4,5 / 5 ✅ | 4,2 / 5 | **4,6 / 5** ✅ | +0,1 |
-| **10. Performance e estabilidade** | 10 pts | 8,0 pts | Metas da Seção 7 batidas (40T estresse `4-5`/`1-1`, `1920×1080` & `1080×1920`), 0 vazamentos nas 20 fases, 0 console errors, 26/26 testes verdes, `dist/` sem código dev. | 4,5 / 10 | 8,8 / 10 ✅ | 7,8 / 10 | **8,7 / 10** ✅ | -0,1 |
-| **TOTAL** | **100 pts** | **≥ 90,0 pts** | **AAA aprovado = ≥ 90/100 + nenhum critério < 80% + 0 P0** | **40,0 / 100** | **65,3 / 100** | **78,3 / 100** | **90,1 / 100** ✅ | **+24,8** |
+| Critério (Seção 8.3) | Peso | Piso Mínimo (80%) | O que é Avaliado | Baseline (Pré-F1) | G1 (F1) | G2 (F2) | Pré-Polish F3 (`#89`) | **G3 (F3, `reviewer-f3b` #93)** | Δ (F2→F3) |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| **1. Silhueta e leitura em 1 s** | 15 pts | 12,0 pts | Distinção imediata de cada categoria/torre a `90–210u`, proporção clara e separação figura-fundo. | 7,5 / 15 | 9,5 / 15 | 13,8 / 15 | 13,2 / 15 | **14,1 / 15** ✅ | +0,3 |
+| **2. Forma (bisel, proporção, hierarquia 3 níveis)** | 10 pts | 8,0 pts | Chanfros/bevels captando especular, subconjuntos mecânicos coerentes e leitura Macro/Meso/Micro (`210u / 90u / 24u`). | 4,0 / 10 | 4,5 / 10 | 8,9 / 10 | 7,8 / 10 | **9,0 / 10** ✅ | +0,1 |
+| **3. Materiais PBR corretos e coerentes** | 10 pts | 8,0 pts | Dielétricos `metalness ≤ 0.05`, `normalMap` Sobel + ORM, desgaste/sujeira e densidade de texel ≤ `2×` (`64–128 px/u`). | 4,0 / 10 | 5,5 / 10 | 9,0 / 10 | 8,6 / 10 | **9,0 / 10** ✅ | 0,0 |
+| **4. Progressão de tier/especialização** | 10 pts | 8,0 pts | Evolução clara `nv1 → nv2-3 → nv4+ → 5A / 6B` + ghost limpo (`EdgesGeometry`) e `ownerRingMesh` sem clipping. | 4,5 / 10 | 4,5 / 10 | 9,2 / 10 | 7,9 / 10 | **9,2 / 10** ✅ | 0,0 |
+| **5. Luz, sombra e oclusão** | 10 pts | 8,0 pts | IBL externo por bioma, `AgX`, sombras `PCFShadowMap` sem acne/clipping, AO de contato ancorando bases e bloom 100% seletivo. | 3,5 / 10 | 8,0 / 10 ✅ | 9,0 / 10 | 8,8 / 10 | **9,0 / 10** ✅ | 0,0 |
+| **6. Terreno e composição do mapa** | 10 pts | 8,0 pts | Splatting + detail `64 px/u` (zero "bolotas"), micro-relevo natural, estradas/bermas nítidas, props enraizados e Spawn/FOB herói. | 3,5 / 10 | 4,0 / 10 | 9,0 / 10 | 9,0 / 10 | **9,0 / 10** ✅ | 0,0 |
+| **7. Identidade de bioma e atmosfera** | 10 pts | 8,0 pts | 7 biomas distintos preservando cores de `worlds.js`, zero white-out ártico, skydome/neblina coerentes e superfícies especiais convincentes. | 3,0 / 10 | 7,8 / 10 | 8,8 / 10 | 8,8 / 10 | **8,8 / 10** ✅ | 0,0 |
+| **8. Legibilidade tática** | 10 pts | 8,0 pts | Contraste inimigos vs terreno ≥ `3:1` em grayscale, células especiais inequívocas, acessibilidade daltônico-safe, emissivo ≤ 5%, zero strobe > 3 Hz. | 4,0 / 10 | 8,2 / 10 ✅ | 9,1 / 10 | 8,4 / 10 | **9,2 / 10** ✅ | +0,1 |
+| **9. Imagem limpa (AA, cintilação, z-fighting)** | 5 pts | 4,0 pts | MSAA/SMAA limpo no zoom 400%, zero z-fighting, zero shimmer de mipmap/aliasing em diagonais e linhas de rota. | 1,5 / 5 | 4,5 / 5 ✅ | 4,6 / 5 | 4,5 / 5 | **4,6 / 5** ✅ | 0,0 |
+| **10. Performance e estabilidade** | 10 pts | 8,0 pts | Metas da Seção 7 batidas (40T estresse `4-5`/`1-1`, `1920×1080` & `1080×1920`), 0 vazamentos nas 20 fases, 0 console errors, 31/31 testes verdes, `dist/` sem código dev. | 4,5 / 10 | 8,8 / 10 ✅ | 8,7 / 10 | 8,6 / 10 | **8,6 / 10** ✅ | -0,1 |
+| **TOTAL** | **100 pts** | **≥ 90,0 pts** | **AAA aprovado = ≥ 90/100 + nenhum critério < 80% + 0 P0** | **40,0 / 100** | **65,3 / 100** | **90,1 / 100** ✅ | **85,6 / 100** | **90,5 / 100** ✅ | **+0,4** |
 
 ---
 
@@ -426,8 +431,9 @@ Todas as 8 recomendações abaixo foram **aprovadas pelo usuário no GATE G0** (
 
 - **2026-11-21 — Fase 0 (Auditoria, Baseline & Plano Mestre):** Concluída e aprovada no **GATE G0** (commit `eaff7f2`). `npm test` `15/15 PASS`; `npm run build` `PASS`; 8 screenshots baseline capturados; APIs Three.js `0.187.0` verificadas.
 - **2026-11-21 — Fase 1 (Fundação Global: Dev Tools, Quality Presets, AA, Tone Mapping, IBL por Bioma, Bloom HDR & Kits Geométricos/PBR):** Concluída, auditada por revisor independente (`reviewer-f1`: **`40,0 → 65,3 / 100`, `+25,3 pts`**) e aprovada no **GATE G1** (commit `9d6eaf1`). `npm test` `21/21 PASS`; `npm run build` `PASS` (`0` matches de dev tools em `dist/`); `0 errors / 0 warnings` no console; `0` vazamentos após 20 fases em sequência (`Δgeo=0, Δtex=0, Δprog=0`); `Δprograms = 0` ao construir 12 torres diversas; Mobile Portrait `19,9 → 59,5 FPS`; White-out ártico `55,3% → 0,00%`.
-- **2026-11-22 — Fase 2 (Vertical Slice: 5 Torres Hero `howitzer, patriot, tesla_tower, phalanx, ew_crew` + Mapa `1-1` Deserto):** Concluída através das Etapas 2A–2F. Na 1ª auditoria (`reviewer-f2`, #62), o slice obteve **`78,3 / 100`** com 5 P1s identificados (costuras quadriculadas em `ProceduralPBRTextures`, tangência de anéis `specRing`/`crownRing` e `ownerRingMesh`, poligonalidade/culling em pratos do `ew_crew` e `tesla 5A`, leitura `phalanx 5A` vs `6B` + `229` draw calls no mix, e elipse dura do cone da FOB + rochas gêmeas). Todos os 5 P1s foram resolvidos na Etapa 2E (`patriot Lv4` **`-67%` calls**, mix `1-1` **`229 → 154/168` calls**, `C5: 132/146`, `1-1` vazio **`295 → 78` / `56` pós-ciclo**, ghost ciano `0x38bdf8` em `5` calls) e re-auditados por **`reviewer-f2b` (#68)** com contexto limpo, alcançando **`90,1 / 100` ✅ (`Δ F1→F2: +24,8 pts`, `0 P0`, `0 P1`, 10/10 critérios ≥ 87%)**. `npm test` **`26/26 PASS`**; `npm run build` **`PASS`** (`0` dev leaks em `dist/`); `0 errors / 0 warnings` no console; ciclo de 20 fases **`Δgeo=0, Δtex=0, Δprog=0, lights=5`**; **`Δprograms = 0`**. Publicada na **Seção 14** para **GATE G2** (e travamento da Art Bible §5).
-- *(Próximo registro: Fase 3 — Produção em Escala das Restantes 18 Torres nos 6 Estados → GATE G3).*
+- **2026-11-22 — Fase 2 (Vertical Slice: 5 Torres Hero `howitzer, patriot, tesla_tower, phalanx, ew_crew` + Mapa `1-1` Deserto):** Concluída através das Etapas 2A–2F, auditada por **`reviewer-f2b` (#68)** com **`90,1 / 100` ✅** e aprovada no **GATE G2** (commit `79f1f1a`). `npm test` `26/26 PASS`; `npm run build` `PASS`; ciclo 20 fases `Δgeo=0/Δtex=0/Δprog=0`; `Δprograms=0`.
+- **2026-11-23 — Fase 3 (Produção em Escala: Restantes 18 Torres nos 6 Estados):** Concluída através das Etapas 3A–3E. Extraído `TowerRigPrimitives.ts` + 4 módulos `src/three/towers/*.ts` integrados em `MilitaryModels3D.ts` (removidos builders legados e `specRing`/`crownRing`), validados por `tests/visual-towers23.test.mjs` (**`31/31 PASS`**) e `npm run build` (**`PASS`**, `0` leaks em `dist/`). Medições WebGL2 (`#87`/`#91`): Gallery `nv1` 23/23 caiu **`971 → 479` sceneCalls (`-50,7%` vs F1, `74.214` tris)**; `5A: 549 calls`, `6B: 551 calls`, `64px silhouette: 194 calls`; `1-1` Ultra pós-polish (`7` torres `5A`) em `279 sceneCalls / 559 fullCalls`, `101.900` tris, `programs = 51`; `low 59,9 FPS`, `medium 58,8 FPS p50`; `Δprograms = 0` em colocação/upgrades; ciclo 20 fases `Δgeo=0/Δtex=0/Δprog=0`; `0` console errors/warnings. Na auditoria cega (`reviewer-f3`, `#89`), obteve **`85,6 / 100`** com 3 P1s (`ewRings` colidindo em runtime, `abrams_pit` cheeks em 24u, `ballista 5A`); após Stage 3E (correção dos 3 P1s + 4 P2s), **`reviewer-f3b` (#93)** aprovou com **`90,5 / 100` ✅ (`0 P0`, `0 P1`, `10/10 ≥ 86%`)**. Publicada na **Seção 15** para **GATE G3**.
+- *(Próximo registro: Fase 4 — 6 Biomas Restantes / 19 Fases, Células Especiais 3D & Cache `loadStage` → GATE G4).*
 
 ---
 
@@ -706,3 +712,51 @@ Na Etapa 2D (`#62`), o revisor independente `reviewer-f2` atribuiu **`78,3 / 100
 | **FOB HQ sem vazamento à direita e sem elipse dura** | ✅ | `f2_1-1_fob_closeup.png`: cone fade suave antes do asfalto e 100% contido dentro do plinto. |
 | **`ownerRingMesh` sem clipping (`y=0.035`)** | ✅ | `f2_1-1_closeup_c5.png`, `f2_1-1_aa_zoom400.png`: todos os 5 anéis externos limpos ao redor das bases. |
 | **Emissivo `≤ 5%` + zero bloom difuso (`0% ≥ 245`)** | ✅ | `f2_gallery_sheet_nv1.png` (nas 5 torres hero), `f2_slice_tesla_*`, `f2_1-1_desert_c1.png` (`meanLuma 95,8`, `0,00% ≥ 245`). |
+
+---
+
+## 15. Diário de Bordo — Fase 3: 23/23 Torres Remodeladas (GATE G3)
+
+### 15.1 Arquitetura Modular & Arquivos da Fase 3
+
+| Arquivo | Tipo | Responsabilidade & Entregas Verificadas |
+|---|---|---|
+| [src/three/TowerRigPrimitives.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/TowerRigPrimitives.ts) | Novo | Extração compartilhada de `StaticMeshBatcher`, materiais PBR calibrados (`steel` `roughness 0.44 / env 1.05`, `diamondPlate` `roughness 0.56 / env 1.0` pós-3E), `createBatchedMissileCapsMesh`, `createContactShadowMesh` e helpers de geometria biselada. |
+| [src/three/towers/LegacyAndPrecisionTowers3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/towers/LegacyAndPrecisionTowers3D.ts) | Novo | Lote 3a: `hesco`, `m2_bunker`, `bushmaster`, `ballista` (incl. escudo/capota frontal angulado e braços duplos em `5A` pós-3E) e `sniper_tower` (X-bracing ajustado `w=1.52` pós-3E). |
+| [src/three/towers/AreaAndMissileTowers3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/towers/AreaAndMissileTowers3D.ts) | Novo | Lote 3b: `javelin`, `abrams_pit` (cunhas frontais `createSideExtrudeGeo` sem interpenetração em `24u` pós-3E), `tos1_mlrs` (ogivas em repouso em `navalWhite`/`brass` sem efeito LED pós-3E), `minefield` e `harpoon_tower` (`specTrimA` em `5A` pós-3E). |
+| [src/three/towers/ElementalTowers3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/towers/ElementalTowers3D.ts) | Novo | Lote 3c: `cryo_tower`, `toxic_tower`, `flamethrower`, `helios_laser` e `railgun` (todas `≤ 3.346` tris, emissivo `≤ 2,49%`). |
+| [src/three/towers/SupportTowers3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/towers/SupportTowers3D.ts) | Novo | Lote 3d: `iron_dome` (`ewRings` em `r=1.74..1.80 @ y=0.29` pós-3E), `eng_workshop` (`ewRings` em `r=1.75..1.81 @ y=0.31` pós-3E) e `energy_extractor`. |
+| [src/three/MilitaryModels3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/MilitaryModels3D.ts) | Editado | Integração dos 18 novos builders em `createTowerModel3D(defId, level, specialization)` passando `specialization` para 22/22 torres + `hesco`; remoção das 18 funções `build*` legadas, helpers mortos e bloco legado `specRing`/`crownRing`. |
+| [src/three/Battlefield3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/Battlefield3D.ts) | Editado (3E) | Contenção da animação de `ewRings` em `L4544-4546` para `pulse = 0.96 + Math.sin(phase * Math.PI * 2) * 0.05` (`[0.91, 1.01]`), evitando colisão com estruturas da própria torre e invasão de torres vizinhas. |
+| [tests/visual-towers23.test.mjs](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/tests/visual-towers23.test.mjs) | Novo | Validação automatizada de 23/23 torres × estados (`hesco` 2 estados; 22 restantes 6 estados), geometria finita, `maxRLow ≤ 1.84`, compactação, `missileCaps` batched, hooks `TowerRig3D`, delta `5A` vs `6B` e orçamento emissivo (**`31/31 PASS`**). |
+
+### 15.2 Medições Reais WebGL2, Benchmarks & Saúde do Build (Posts `#87` e `#91`)
+
+- **Suíte & Build:** `npm test` **`31/31 PASS`** (`2.874,56 ms`); `npm run build` **`PASS`** (`3,43 s`, 85 módulos); `dist/assets/*` com **`0` ocorrências** de `VisualGallery3D`, `PerfOverlay`, `__DEFCON_DEV__`, `__DEFCON_PERF__`.
+- **Gallery 23/23 (`?gallery=1&ui=0&dpr=1`, pós-polish `#91`):**
+  - `f3_gallery_sheet_nv1.png`: **`479` sceneCalls / `493` totalCalls**, **`74.214` tris** (**`-50,7%` draw calls** vs Fase 1 `971` calls!).
+  - `f3_gallery_sheet_5A.png`: **`549` sceneCalls / `563` totalCalls**, **`109.910` tris**.
+  - `f3_gallery_sheet_6B.png`: **`551` sceneCalls / `565` totalCalls**, **`108.246` tris**.
+  - `f3_gallery_silhouette_64px.png`: **`194` calls**, **`33.528` tris** (23/23 silhuetas distintas em 64px).
+- **Frota 23/23 (Headless `#85` / `#93`):** `max tris = 3.710` (`howitzer@5A`; únicas `>3.500`: `howitzer@5A 3710`, `tesla_tower@5A 3698`, `tesla_tower@6B 3550`, `phalanx@5A 3502`; **todas as 18 novas `≤ 3.414`**); `max bright(>=1.0) emissivo = 1,46%` (`energy_extractor@nv4`); `activeNonMetallic = 3,30%` (`ew_crew@5A`); `maxRLow ≤ 1.84`.
+- **Gameplay `1-1` Ultra Pós-Polish (`7` torres `5A`: `abrams_pit, ballista, tos1_mlrs, cryo_tower, iron_dome, eng_workshop, hesco`):** `279 sceneCalls / 559 fullCalls` (incl. `GTAOPass`), `101.900` tris, `programs = 51`, `p50 = 49,9 ms` / `avg = 46,5 ms` (`20,0 FPS` na iGPU Intel UHD 630 em `Ultra`).
+- **Comparativo 4 Tiers (`1-1` c/ 8 torres `5A/6B`, `#87`):**
+  - `low`: `340 / 340` calls, `103.970` tris, **`16,7 ms` p50 (`59,9 FPS`)**.
+  - `medium`: `337 / 351` calls, `103.730` tris, **`17,0 ms` p50 (`58,8 FPS p50` / `42,0 FPS avg`)**.
+  - `high`: `337 / 351` calls, `33,1 ms` p50 (`30,2 FPS` iGPU).
+  - `ultra`: `632 / 1.238` calls (GTAO), `49,9 ms` p50 (`20,0 FPS` iGPU).
+- **Estabilidade & Vazamento:** `Δprograms = 0` em colocação/upgrades (`51 → 51`); ciclo completo das **20 fases (`1-1`..`4-5` + retorno `1-1`)** com **`Δgeo = 0, Δtex = 0, Δprog = 0, lights = [5]`**; **`0` console errors / `0` warnings / `0` pageErrors**.
+
+### 15.3 Auditoria Cega (`reviewer-f3` `85,6`) → Polish Stage 3E → Aprovação (`reviewer-f3b` `90,5 / 100` ✅)
+
+1. **1ª Auditoria (`reviewer-f3`, `#89`):** Pontuou **`85,6 / 100`** (`0 P0`, `3 P1`, `5 P2`), reprovando para polish por 2 critérios abaixo de 80% (`#2 Forma 7,8/10` e `#4 Tier/Spec 7,9/10`).
+2. **Stage 3E (Correções Cirúrgicas):**
+   - **3 P1s resolvidos:** (a) `ewRings` contidos em `scale ∈ [0.91, 1.01]` e reposicionados fora dos contrafortes/helipads em `iron_dome` e `eng_workshop`; (b) `abrams_pit` `cheekGeo` substituído por cunhas extrudadas alinhadas à rampa frontal (zero interpenetração em `24u`); (c) `ballista 5A` com escudo/capota frontal angulado + braços duplos externos claramente distintos de `nv1`.
+   - **4 P2s resolvidos:** (a) `tos1_mlrs` ogivas em repouso trocadas para `navalWhite`/`brass`; (b) `steel` (`roughness 0.44, env 1.05`) e `diamondPlate` (`roughness 0.56, env 1.0`) sem hotspots de bloom; (c) `harpoon_tower 5A` com `specTrimA`; (d) `sniper_tower` X-bracing ajustado (`w=1.52`).
+3. **Re-auditoria (`reviewer-f3b`, `#93`):** **`APROVADO PARA GATE G3 — 90,5 / 100 ✅`** (`0 P0`, `0 P1`, `10/10 critérios ≥ 86%`): `#1 14,1/15`, `#2 9,0/10`, `#3 9,0/10`, `#4 9,2/10`, `#5 9,0/10`, `#6 9,0/10`, `#7 8,8/10`, `#8 9,2/10`, `#9 4,6/5`, `#10 8,6/10`.
+4. **P2 Residuais Não-Bloqueantes (para polish/Fase 4):**
+   - `iron_dome 5A/6B` com `37/39` calls na Gallery (`#87`);
+   - `sniper_tower` extremidades internas do X-bracing terminam ligeiramente antes das pernas inclinadas;
+   - Glint pontual em `brass` (`roughness 0.26`) no pistão de `eng_workshop`;
+   - `ewPulseMesh` no chão ao expandir até o alcance máximo sobrepõe borda da estrada/torres adjacentes;
+   - Estresse de 40 torres em `4-5` e cache de `loadStage ≤ 120 ms` planejados para a Fase 4.
