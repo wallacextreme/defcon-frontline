@@ -372,6 +372,7 @@ function isCellRoadLike(baseTerrain: Uint8Array[], c: number, r: number): boolea
 interface CellSpatialCache {
   segs: Float32Array;
   arcs: Float32Array;
+  roadBoxes: Float32Array;
   rocks: Float32Array;
   pads: Float32Array;
   hasAnyFeature: boolean;
@@ -383,7 +384,8 @@ const SPLAT_FIELD_NH = 147;
 function buildSplatSpatialCache(
   baseTerrain: Uint8Array[],
   spawnPoints: ReadonlyArray<SplatGridPoint> = [],
-  fobPoint?: SplatGridPoint
+  fobPoint?: SplatGridPoint,
+  mergeWideRoads = false
 ): CellSpatialCache[] {
   const totalCells = GRID_COLS * GRID_ROWS;
   const cells: CellDescriptor[] = new Array(totalCells);
@@ -441,6 +443,7 @@ function buildSplatSpatialCache(
       const c1 = Math.min(GRID_COLS - 1, c + 1);
       const segList: number[] = [];
       const arcList: number[] = [];
+      const roadBoxList: number[] = [];
       const rockList: number[] = [];
       const padList: number[] = [];
 
@@ -450,6 +453,9 @@ function buildSplatSpatialCache(
           const nb = cells[nr * GRID_COLS + nc];
           const cx = nc + 0.5;
           if (nb.roadLike) {
+            if (mergeWideRoads && nb.right && nb.down && isCellRoadLike(baseTerrain, nc + 1, nr + 1)) {
+              roadBoxList.push(cx, cx + 1.0, cz, cz + 1.0);
+            }
             if (nb.isTurn) {
               const dx = nb.turnDx;
               const dz = nb.turnDz;
@@ -507,9 +513,15 @@ function buildSplatSpatialCache(
       spatialCache[r * GRID_COLS + c] = {
         segs: new Float32Array(segList),
         arcs: new Float32Array(arcList),
+        roadBoxes: new Float32Array(roadBoxList),
         rocks: new Float32Array(rockList),
         pads: new Float32Array(padList),
-        hasAnyFeature: segList.length > 0 || arcList.length > 0 || rockList.length > 0 || padList.length > 0
+        hasAnyFeature:
+          segList.length > 0 ||
+          arcList.length > 0 ||
+          roadBoxList.length > 0 ||
+          rockList.length > 0 ||
+          padList.length > 0
       };
     }
   }
@@ -681,7 +693,8 @@ function packSplatFromFields(
         let minRoadDist = 9.0;
         const segs = sc.segs;
         const arcs = sc.arcs;
-        if (segs.length > 0 || arcs.length > 0) {
+        const roadBoxes = sc.roadBoxes;
+        if (segs.length > 0 || arcs.length > 0 || roadBoxes.length > 0) {
           let minRoadSq = 81.0;
           for (let i = 0; i < segs.length; i += 4) {
             const ax = segs[i];
@@ -717,6 +730,11 @@ function packSplatFromFields(
               const d2 = ex2 * ex2 + ez2 * ez2;
               dSq = d1 < d2 ? d1 : d2;
             }
+            if (dSq < minRoadSq) minRoadSq = dSq;
+          }
+          for (let i = 0; i < roadBoxes.length; i += 4) {
+            const dBox = distToBox2D(gx, gz, roadBoxes[i], roadBoxes[i + 1], roadBoxes[i + 2], roadBoxes[i + 3]);
+            const dSq = dBox * dBox;
             if (dSq < minRoadSq) minRoadSq = dSq;
           }
           minRoadDist = Math.sqrt(minRoadSq);
@@ -840,7 +858,7 @@ export function createBiomeSplatData(
   }
   const lattice = getDesertNoiseLattice();
   const sinLut = getSinLut();
-  const spatialCache = buildSplatSpatialCache(baseTerrain, spawnPoints, fobPoint);
+  const spatialCache = buildSplatSpatialCache(baseTerrain, spawnPoints, fobPoint, true);
   const fbmField = new Float32Array(SPLAT_FIELD_NW * SPLAT_FIELD_NH);
   const floorField = new Float32Array(SPLAT_FIELD_NW * SPLAT_FIELD_NH);
   computeNonDesertSplatFields(normBiome, lattice, sinLut, fbmField, floorField);
@@ -904,11 +922,11 @@ const ROAD_MARKS_STYLES: Record<BiomeId, RoadMarksStyle> = {
     crosshairStroke: 'rgba(224, 242, 254, 0.28)',
     outerShoulderStroke: 'rgba(202, 218, 234, 0.36)',
     outerShoulderWidth: 8.5,
-    tireTrackStroke: 'rgba(10, 16, 24, 0.34)',
+    tireTrackStroke: 'rgba(14, 22, 34, 0.30)',
     tireTrackWidth: 5.8,
-    curbStroke: 'rgba(148, 196, 232, 0.42)',
+    curbStroke: 'rgba(176, 216, 242, 0.52)',
     curbWidth: 2.6,
-    centerStroke: 'rgba(125, 211, 252, 0.86)',
+    centerStroke: 'rgba(125, 211, 252, 0.88)',
     centerWidth: 3.4,
     centerDash: [14, 14]
   },
@@ -1074,7 +1092,7 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
     strokeColor: string,
     lineWidth: number,
     dashPattern: [number, number] | null,
-    mode: 'tracks' | 'curbs' | 'center'
+    mode: 'tracks' | 'curbs' | 'shoulder' | 'center'
   ) => {
     ctx.save();
     ctx.strokeStyle = strokeColor;
@@ -1088,6 +1106,9 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
       ctx.setLineDash([]);
     }
 
+    const dividerInsetW = tileW * 0.045;
+    const dividerInsetH = tileH * 0.045;
+
     for (let r = 0; r < GRID_ROWS; r++) {
       for (let c = 0; c < GRID_COLS; c++) {
         if (baseTerrain[r]?.[c] !== CELL.ROAD) continue;
@@ -1098,41 +1119,66 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
         const down = isCellRoadLike(baseTerrain, c, r + 1);
         const left = isCellRoadLike(baseTerrain, c - 1, r);
         const right = isCellRoadLike(baseTerrain, c + 1, r);
+        const upLeft = up && left && isCellRoadLike(baseTerrain, c - 1, r - 1);
+        const upRight = up && right && isCellRoadLike(baseTerrain, c + 1, r - 1);
+        const downLeft = down && left && isCellRoadLike(baseTerrain, c - 1, r + 1);
+        const downRight = down && right && isCellRoadLike(baseTerrain, c + 1, r + 1);
+        const hasWideCorner = (dx: number, dz: number): boolean =>
+          dx < 0 ? (dz < 0 ? upLeft : downLeft) : dz < 0 ? upRight : downRight;
         const deg = (up ? 1 : 0) + (down ? 1 : 0) + (left ? 1 : 0) + (right ? 1 : 0);
 
         if (deg === 2 && (up || down) && (left || right)) {
           const dx = right ? 1 : -1;
           const dz = down ? 1 : -1;
-          const signs = offset === 0 ? [0] : [-offset, offset];
-          for (const s of signs) {
-            strokeCornerFillet(cx, cy, dx, dz, s, true, true);
+          const wideInner = hasWideCorner(dx, dz);
+          if (offset === 0) {
+            strokeCornerFillet(cx, cy, dx, dz, 0, true, true);
+          } else if (wideInner) {
+            // Outer corner of a 2x2 wide road: preserve exterior arc only, skip interior ring arc
+            strokeCornerFillet(cx, cy, dx, dz, -offset, true, true);
+          } else {
+            strokeCornerFillet(cx, cy, dx, dz, -offset, true, true);
+            strokeCornerFillet(cx, cy, dx, dz, offset, true, true);
           }
         } else if (deg === 3) {
           const thruVert = up && down;
           if (thruVert) {
             const dx = right ? 1 : -1;
+            const wideUp = hasWideCorner(dx, -1);
+            const wideDown = hasWideCorner(dx, 1);
+            const isParallelDouble = wideUp && wideDown;
             if (mode === 'center') {
               ctx.beginPath();
               ctx.moveTo(cx, cy - halfH);
               ctx.lineTo(cx, cy + halfH);
               ctx.stroke();
 
-              ctx.beginPath();
-              ctx.moveTo(cx + dx * halfW, cy);
-              ctx.lineTo(cx + dx * filletPx, cy);
-              ctx.stroke();
+              if (!isParallelDouble) {
+                ctx.beginPath();
+                ctx.moveTo(cx + dx * halfW, cy);
+                ctx.lineTo(cx + dx * filletPx, cy);
+                ctx.stroke();
 
-              strokeCornerFillet(cx, cy, dx, -1, 0, false, false);
-              strokeCornerFillet(cx, cy, dx, 1, 0, false, false);
-            } else if (mode === 'curbs') {
+                if (!wideUp) strokeCornerFillet(cx, cy, dx, -1, 0, false, false);
+                if (!wideDown) strokeCornerFillet(cx, cy, dx, 1, 0, false, false);
+              }
+            } else if (mode === 'curbs' || mode === 'shoulder') {
               const closedX = cx - dx * offset;
               ctx.beginPath();
               ctx.moveTo(closedX, cy - halfH);
               ctx.lineTo(closedX, cy + halfH);
               ctx.stroke();
 
-              strokeCornerFillet(cx, cy, dx, -1, offset, true, true);
-              strokeCornerFillet(cx, cy, dx, 1, offset, true, true);
+              if (!wideUp) strokeCornerFillet(cx, cy, dx, -1, offset, true, true);
+              if (!wideDown) strokeCornerFillet(cx, cy, dx, 1, offset, true, true);
+              if (mode === 'curbs' && isParallelDouble) {
+                // Continuous tactical double-lane separator along the shared central seam
+                const seamX = cx + dx * (halfW - dividerInsetW);
+                ctx.beginPath();
+                ctx.moveTo(seamX, cy - halfH);
+                ctx.lineTo(seamX, cy + halfH);
+                ctx.stroke();
+              }
             } else {
               for (const s of [-offset, offset]) {
                 ctx.beginPath();
@@ -1140,35 +1186,52 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
                 ctx.lineTo(cx + s, cy + halfH);
                 ctx.stroke();
               }
-              strokeCornerFillet(cx, cy, dx, -1, offset, true, true);
-              strokeCornerFillet(cx, cy, dx, -1, -offset, true, true);
-              strokeCornerFillet(cx, cy, dx, 1, offset, true, true);
-              strokeCornerFillet(cx, cy, dx, 1, -offset, true, true);
+              if (!wideUp) {
+                strokeCornerFillet(cx, cy, dx, -1, offset, true, true);
+                strokeCornerFillet(cx, cy, dx, -1, -offset, true, true);
+              }
+              if (!wideDown) {
+                strokeCornerFillet(cx, cy, dx, 1, offset, true, true);
+                strokeCornerFillet(cx, cy, dx, 1, -offset, true, true);
+              }
             }
           } else {
             const dz = down ? 1 : -1;
+            const wideLeft = hasWideCorner(-1, dz);
+            const wideRight = hasWideCorner(1, dz);
+            const isParallelDouble = wideLeft && wideRight;
             if (mode === 'center') {
               ctx.beginPath();
               ctx.moveTo(cx - halfW, cy);
               ctx.lineTo(cx + halfW, cy);
               ctx.stroke();
 
-              ctx.beginPath();
-              ctx.moveTo(cx, cy + dz * halfH);
-              ctx.lineTo(cx, cy + dz * filletPx);
-              ctx.stroke();
+              if (!isParallelDouble) {
+                ctx.beginPath();
+                ctx.moveTo(cx, cy + dz * halfH);
+                ctx.lineTo(cx, cy + dz * filletPx);
+                ctx.stroke();
 
-              strokeCornerFillet(cx, cy, -1, dz, 0, false, false);
-              strokeCornerFillet(cx, cy, 1, dz, 0, false, false);
-            } else if (mode === 'curbs') {
+                if (!wideLeft) strokeCornerFillet(cx, cy, -1, dz, 0, false, false);
+                if (!wideRight) strokeCornerFillet(cx, cy, 1, dz, 0, false, false);
+              }
+            } else if (mode === 'curbs' || mode === 'shoulder') {
               const closedY = cy - dz * offset;
               ctx.beginPath();
               ctx.moveTo(cx - halfW, closedY);
               ctx.lineTo(cx + halfW, closedY);
               ctx.stroke();
 
-              strokeCornerFillet(cx, cy, -1, dz, offset, true, true);
-              strokeCornerFillet(cx, cy, 1, dz, offset, true, true);
+              if (!wideLeft) strokeCornerFillet(cx, cy, -1, dz, offset, true, true);
+              if (!wideRight) strokeCornerFillet(cx, cy, 1, dz, offset, true, true);
+              if (mode === 'curbs' && isParallelDouble) {
+                // Continuous tactical double-lane separator along the shared central seam
+                const seamY = cy + dz * (halfH - dividerInsetH);
+                ctx.beginPath();
+                ctx.moveTo(cx - halfW, seamY);
+                ctx.lineTo(cx + halfW, seamY);
+                ctx.stroke();
+              }
             } else {
               for (const s of [-offset, offset]) {
                 ctx.beginPath();
@@ -1176,10 +1239,14 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
                 ctx.lineTo(cx + halfW, cy + s);
                 ctx.stroke();
               }
-              strokeCornerFillet(cx, cy, -1, dz, offset, true, true);
-              strokeCornerFillet(cx, cy, -1, dz, -offset, true, true);
-              strokeCornerFillet(cx, cy, 1, dz, offset, true, true);
-              strokeCornerFillet(cx, cy, 1, dz, -offset, true, true);
+              if (!wideLeft) {
+                strokeCornerFillet(cx, cy, -1, dz, offset, true, true);
+                strokeCornerFillet(cx, cy, -1, dz, -offset, true, true);
+              }
+              if (!wideRight) {
+                strokeCornerFillet(cx, cy, 1, dz, offset, true, true);
+                strokeCornerFillet(cx, cy, 1, dz, -offset, true, true);
+              }
             }
           }
         } else if (deg === 4) {
@@ -1190,10 +1257,12 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
             ctx.moveTo(cx, cy - halfH);
             ctx.lineTo(cx, cy + halfH);
             ctx.stroke();
-          } else if (mode === 'curbs') {
+          } else if (mode === 'curbs' || mode === 'shoulder') {
             for (const dx of [-1, 1]) {
               for (const dz of [-1, 1]) {
-                strokeCornerFillet(cx, cy, dx, dz, offset, true, true);
+                if (!hasWideCorner(dx, dz)) {
+                  strokeCornerFillet(cx, cy, dx, dz, offset, true, true);
+                }
               }
             }
           } else {
@@ -1207,7 +1276,9 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
             }
             for (const dx of [-1, 1]) {
               for (const dz of [-1, 1]) {
-                strokeCornerFillet(cx, cy, dx, dz, offset, false, false);
+                if (!hasWideCorner(dx, dz)) {
+                  strokeCornerFillet(cx, cy, dx, dz, offset, false, false);
+                }
               }
             }
           }
@@ -1235,7 +1306,7 @@ function renderRoadMarksTexture(baseTerrain: Uint8Array[], style: RoadMarksStyle
 
   // Optional outer shoulder accumulation (snow drifts, sandstone dust, damp moss, dirt verge)
   if (style.outerShoulderStroke && style.outerShoulderWidth) {
-    strokeRoadGeometry(outerShoulderOffset, style.outerShoulderStroke, style.outerShoulderWidth, null, 'curbs');
+    strokeRoadGeometry(outerShoulderOffset, style.outerShoulderStroke, style.outerShoulderWidth, null, 'shoulder');
   }
 
   // Optional transverse concrete/causeway slab joints along straight road segments
@@ -1623,11 +1694,11 @@ const BIOME_DETAIL_PALETTES: Record<NonDesertBiomeId, BiomeDetailPalette> = {
   arctic: {
     headlessFloor: [192, 208, 224], // #c0d0e0 within #b6c7d8..#cbd9e6
     headlessBerm: [110, 130, 152],
-    headlessRoad: [40, 51, 64],
+    headlessRoad: [68, 84, 102], // Frost-weathered light-slate asphalt for >= 3:1 dark enemy contrast vs snow
     bermBase: [110, 130, 152],
     bermChipLight: 'rgba(182, 202, 222, 0.28)',
     bermChipDark: 'rgba(54, 70, 90, 0.28)',
-    roadBase: [40, 51, 64],
+    roadBase: [68, 84, 102],
     roadDustBias: [18, 24, 32],
     floorStrength: 1.85,
     bermStrength: 2.5,
@@ -1937,9 +2008,12 @@ function createBiomeDetailPair(
 }
 
 /**
- * Returns module-cached 512x512 tileable detail textures (repeat 14x8 = 64 px/u) for any of the 7 biomes.
- * Keeps at most ONE non-desert biome detail set in memory at a time, automatically disposing the previous
- * non-desert set upon switching biomes so VRAM remains bounded (<= 12 MiB).
+ * Returns module-cached tileable detail textures (repeat 14x8) for any of the 7 biomes:
+ * - `desert`: 512x512 (64 px/u), permanently cached across stage loads.
+ * - Non-desert biomes (`arctic`, `industrial`, `forest`, `canyon`, `swamp`, `volcanic`):
+ *   256x256 (32 px/u) for fast stage switching and bounded VRAM.
+ * Keeps at most ONE non-desert biome detail set in memory at a time, automatically disposing the
+ * previous non-desert set upon switching biomes so VRAM remains bounded (<= 12 MiB).
  */
 export function getCachedBiomeDetailTextures(biome: string, maxAnisotropy = 8): BiomeDetailTextures {
   const normBiome = normalizeBiomeId(biome);

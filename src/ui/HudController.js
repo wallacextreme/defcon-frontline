@@ -11,6 +11,21 @@ import { saveManager, MAX_TECH_LEVEL } from '../systems/SaveManager.ts';
 import { getDamageTypeMeta } from '../systems/DamageSystem.js';
 import { multiplayer, MAX_DECK_SIZE, MAX_PLAYERS } from '../systems/MultiplayerManager.ts';
 import { formatColLabel } from '../three/TerrainDiorama3D.ts';
+import { resolveQualityConfig } from '../three/GraphicsQuality.ts';
+
+const QUALITY_TIER_LABELS = {
+  low: 'BAIXO',
+  medium: 'MÉDIO',
+  high: 'ALTO',
+  ultra: 'ULTRA'
+};
+
+const QUALITY_TIER_DESCS = {
+  low: 'Desempenho máximo: sombras 1024px, sem pós-processamento ou névoa ambiente.',
+  medium: 'Equilibrado para mobile e GPU integrada: MSAA 2x, Bloom HDR e sombras 1536px.',
+  high: 'Alta fidelidade tática: MSAA 4x, sombras 2048px, IBL e animação de vegetação.',
+  ultra: 'Qualidade máxima: GTAO, DPR até 2.0x, MSAA 4x e sombras 2048px.'
+};
 
 const TOWER_ICONS = {
   ballista: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18L20 6M6 6c4 3 8 7 12 12M12 4v16"/></svg>`,
@@ -178,6 +193,9 @@ export class HudController {
       btnModalInstallPwa: document.getElementById('btn-modal-install-pwa'),
       btnForceUpdatePwa: document.getElementById('btn-force-update-pwa'),
       pwaInstallHint: document.getElementById('pwa-install-hint'),
+      qualityStatusText: document.getElementById('quality-status-text'),
+      qualityModeBadge: document.getElementById('quality-mode-badge'),
+      helpQualityBadge: document.getElementById('help-quality-badge'),
       coopSquadHud: document.getElementById('coop-squad-hud'),
       coopHudRoom: document.getElementById('coop-hud-room'),
       coopHudVotes: document.getElementById('coop-hud-votes'),
@@ -209,11 +227,24 @@ export class HudController {
     };
 
     this.deferredInstallPrompt = null;
+    this.qualityTier = 'high';
+    this.qualitySource = 'auto';
+    this._lastRenderedQualityTier = null;
+    this._lastRenderedQualitySource = null;
+    try {
+      const qCfg = resolveQualityConfig();
+      this.qualityTier = qCfg.tier;
+      this.qualitySource = qCfg.source;
+    } catch {
+      // Fallback to high/auto in non-browser environments
+    }
+
     this.buildArsenalCards();
     this.buildPriorityButtons();
     this.initCoopStageSelect();
     this.bindDomEvents();
     this.bindBusEvents();
+    this.renderQualityState(this.qualityTier, this.qualitySource, true);
     this.checkUrlCoopAutoJoin();
   }
 
@@ -361,9 +392,11 @@ export class HudController {
 
     if (this.el.btnCoop) {
       this.el.btnCoop.classList.toggle('online', isActive);
-      this.el.btnCoop.textContent = isActive
-        ? `🌐 CO-OP (${players.filter((p) => p.connected).length}/${MAX_PLAYERS})`
-        : '🌐 CO-OP SQUAD (1-4P)';
+      if (isActive) {
+        this.el.btnCoop.textContent = `🌐 CO-OP (${players.filter((p) => p.connected).length}/${MAX_PLAYERS})`;
+      } else {
+        this.el.btnCoop.innerHTML = '🌐 CO-OP<span class="hide-sm-label"> SQUAD (1-4P)</span>';
+      }
     }
 
     if (this.el.coopStatusBadge) {
@@ -545,6 +578,15 @@ export class HudController {
 
     this.el.btnForceSave?.addEventListener('click', () => {
       bus.emit('cmd:forceSave');
+    });
+
+    document.querySelectorAll('.btn-quality-tier[data-quality]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tier = btn.dataset.quality;
+        if (!tier) return;
+        this.renderQualityState(tier, 'storage', true);
+        bus.emit('cmd:setQuality', { tier });
+      });
     });
 
     this.el.btnResetMission?.addEventListener('click', () => {
@@ -822,6 +864,21 @@ export class HudController {
 
   bindBusEvents() {
     bus.on('hud:state', (state) => this.renderState(state));
+    bus.on('state:update', (state) => {
+      if (state?.qualityTier) {
+        this.renderQualityState(state.qualityTier, state.qualitySource);
+      }
+    });
+    bus.on('quality:changed', (payload) => {
+      const tier = typeof payload === 'string' ? payload : (payload?.tier || payload?.qualityTier);
+      const source =
+        typeof payload === 'object' && payload !== null
+          ? (payload.source || payload.qualitySource)
+          : undefined;
+      if (tier) {
+        this.renderQualityState(tier, source, true);
+      }
+    });
     bus.on('hud:speed', (speed) => this.renderSpeed(speed));
     bus.on('hud:tool', (tool) => this.renderActiveTool(tool));
     bus.on('hud:selectedTower', (tower) => this.renderInspector(tower));
@@ -868,7 +925,7 @@ export class HudController {
       if (this.el.btnSaveMenu) {
         const dt = new Date(timestamp || Date.now());
         const hhmm = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-        this.el.btnSaveMenu.textContent = `💾 SALVO ${hhmm}`;
+        this.el.btnSaveMenu.innerHTML = `💾 SALVO<span class="hide-sm-label"> ${hhmm}</span>`;
         this.el.btnSaveMenu.classList.add('saved-flash');
         if (this.saveFlashTimeout) clearTimeout(this.saveFlashTimeout);
         this.saveFlashTimeout = setTimeout(() => {
@@ -1112,8 +1169,47 @@ export class HudController {
     });
   }
 
+  renderQualityState(tier, source, force = false) {
+    if (!tier) return;
+    const normalizedTier = String(tier).trim().toLowerCase();
+    if (!QUALITY_TIER_LABELS[normalizedTier]) return;
+    const normalizedSource = String(source || this.qualitySource || 'auto').trim().toLowerCase();
+
+    if (
+      !force &&
+      this._lastRenderedQualityTier === normalizedTier &&
+      this._lastRenderedQualitySource === normalizedSource
+    ) {
+      return;
+    }
+
+    this._lastRenderedQualityTier = normalizedTier;
+    this._lastRenderedQualitySource = normalizedSource;
+    this.qualityTier = normalizedTier;
+    this.qualitySource = normalizedSource;
+
+    const isManual = normalizedSource === 'storage' || normalizedSource === 'manual';
+    const modeLabel = isManual ? 'MANUAL' : normalizedSource === 'query' ? 'URL' : 'AUTO';
+    const badgeText = `${QUALITY_TIER_LABELS[normalizedTier]} • ${modeLabel}`;
+
+    for (const badge of [this.el.qualityModeBadge, this.el.helpQualityBadge]) {
+      if (!badge) continue;
+      badge.textContent = badgeText;
+      badge.classList.toggle('is-manual', isManual);
+    }
+
+    if (this.el.qualityStatusText) {
+      this.el.qualityStatusText.textContent = QUALITY_TIER_DESCS[normalizedTier];
+    }
+
+    document.querySelectorAll('.btn-quality-tier[data-quality]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.quality === normalizedTier);
+    });
+  }
+
   renderSaveTab() {
     if (!this.el.tabSave) return;
+    this.renderQualityState(this.qualityTier, this.qualitySource, true);
 
     const active = saveManager.getActiveMission();
     const lastSavedAt = saveManager.getLastSavedAt();
@@ -1203,6 +1299,9 @@ export class HudController {
 
   renderState(s) {
     this.latestState = s;
+    if (s.qualityTier) {
+      this.renderQualityState(s.qualityTier, s.qualitySource);
+    }
     this.el.missionLabel.textContent = `MUNDO ${s.worldId} // FASE ${s.worldId}-${s.stageId}: ${s.stageTitle || ''}`;
     this.el.budget.textContent = `$${s.budget}`;
     this.el.wb.textContent = `${(s.warBonds ?? saveManager.getWarBonds()).toLocaleString()} WB$`;

@@ -165,6 +165,21 @@ const batchScratchQuat = new THREE.Quaternion();
 const batchScratchScale = new THREE.Vector3();
 const batchScratchMat = new THREE.Matrix4();
 
+const NO_CAST_SHADOW_MATS = new Set<string>([
+  'sapphireOptic',
+  'opticGreen',
+  'shtoraRed',
+  'radarCyan',
+  'amberGlow',
+  'ewPurple',
+  'ewCyan',
+  'empPurple',
+  'afterburner',
+  'glass',
+  'brass',
+  'copperAesa'
+]);
+
 /**
  * Collects static geometry parts by `(pivotKey, matKey)`, transforming temporary clones
  * and caching one merged BufferGeometry per `(defId, vLevel, spec, pivotKey, matKey)`.
@@ -243,6 +258,9 @@ export class StaticMeshBatcher {
         if (isEmissiveTrim) {
           mesh.receiveShadow = false;
         }
+      } else if (NO_CAST_SHADOW_MATS.has(matKey)) {
+        mesh.userData.noCastShadow = true;
+        mesh.castShadow = false;
       }
       parent.add(mesh);
       created.push(mesh);
@@ -640,7 +658,7 @@ export function enableShadows(obj: THREE.Object3D, cast = true, receive = true) 
         m.castShadow = false;
         m.receiveShadow = false;
       } else {
-        m.castShadow = cast;
+        m.castShadow = m.userData?.noCastShadow ? false : cast;
         m.receiveShadow = receive;
       }
     }

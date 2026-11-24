@@ -2856,52 +2856,159 @@ function buildTitaCerco(hullGroup: THREE.Group, rig: EnemyRig3D, mats: ModelMate
 export function createA10Warthog3D(): THREE.Group {
   const jet = new THREE.Group();
   const mats = getMats();
+  const batcher = new StaticMeshBatcher('a10_warthog', 1, null);
 
-  const fuseGeo = createLatheAlongZGeo([
-    [0.01, 3.05],
-    [0.24, 2.55],
-    [0.39, 1.75],
-    [0.42, 0.45],
-    [0.36, -1.85],
-    [0.18, -2.55],
-    [0.01, -2.65]
-  ]);
-  jet.add(new THREE.Mesh(fuseGeo, mats.navalGray));
-  addCyl(jet, 0.11, 0.11, 0.95, 10, mats.gunmetal, 0, -0.14, 3.15, Math.PI / 2, 0, 0);
-  addBox(jet, 0.42, 0.36, 1.38, mats.glass, 0, 0.38, 1.35, 0.1, 0, 0);
-
-  const a10Wing = createPlanExtrudeGeo(
+  // Contoured fuselage along +Z flight axis (ordered -Z -> +Z for outward Lathe normals)
+  const fuseGeo = createLatheAlongZGeo(
     [
-      [-3.3, 0.42],
-      [3.3, 0.42],
-      [3.18, -0.62],
-      [0.45, -0.56],
-      [-0.45, -0.56],
-      [-3.18, -0.62]
+      [0.005, -2.72],
+      [0.12, -2.62],
+      [0.24, -2.35],
+      [0.36, -1.55],
+      [0.42, -0.35],
+      [0.43, 0.75],
+      [0.40, 1.65],
+      [0.29, 2.35],
+      [0.16, 2.85],
+      [0.005, 3.08]
     ],
-    0.1,
+    16
+  );
+  batcher.add('root', 'navalGray', fuseGeo);
+  batcher.add('root', 'navalGray', getRoundedBoxGeo(0.32, 0.16, 2.55, 0.06, 1), 0, 0.36, -0.68);
+  batcher.add('root', 'darkSteel', getRoundedBoxGeo(0.62, 0.24, 1.45, 0.07, 1), 0, 0.05, 1.25);
+
+  // GAU-8 Avenger 30mm rotary cannon under nose + brass muzzle collar
+  batcher.add('root', 'darkSteel', getRoundedBoxGeo(0.24, 0.22, 0.92, 0.05, 1), 0, -0.17, 2.52);
+  const shroudGeo = getChamferedCylinderGeo(0.115, 0.125, 0.56, 10, 0.02);
+  batcher.add('root', 'gunmetal', shroudGeo, 0, -0.17, 2.95, Math.PI * 0.5, 0, 0);
+  const brassCollarGeo = getChamferedCylinderGeo(0.118, 0.118, 0.11, 10, 0.018);
+  batcher.add('root', 'brass', brassCollarGeo, 0, -0.17, 3.24, Math.PI * 0.5, 0, 0);
+  const barrelGeo = getChamferedCylinderGeo(0.028, 0.028, 0.58, 6, 0.006);
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2 + Math.PI / 4;
+    batcher.add('root', 'gunmetal', barrelGeo, Math.cos(a) * 0.052, -0.17 + Math.sin(a) * 0.052, 3.44, Math.PI * 0.5, 0, 0);
+  }
+
+  // Cockpit bubble canopy (glass) inside armored darkSteel sill frame + HUD optic
+  const canopyFrameGeo = createSideExtrudeGeo(
+    [
+      [0.64, 0.30],
+      [2.12, 0.26],
+      [1.82, 0.45],
+      [0.95, 0.48]
+    ],
+    0.42,
+    0.03,
+    0.03
+  );
+  batcher.add('root', 'darkSteel', canopyFrameGeo);
+  const canopyGlassGeo = createSideExtrudeGeo(
+    [
+      [0.74, 0.36],
+      [2.02, 0.32],
+      [1.76, 0.62],
+      [1.36, 0.68],
+      [0.98, 0.58]
+    ],
+    0.34,
+    0.035,
+    0.035
+  );
+  batcher.add('root', 'glass', canopyGlassGeo);
+  batcher.add('root', 'sapphireOptic', getRoundedBoxGeo(0.14, 0.09, 0.12, 0.02, 1), 0, 0.47, 1.78);
+
+  // Swept/tapered wings with chamfered wingtip pods
+  const a10WingGeo = createPlanExtrudeGeo(
+    [
+      [-3.38, 0.36],
+      [-0.48, 0.44],
+      [0.48, 0.44],
+      [3.38, 0.36],
+      [3.26, -0.58],
+      [0.54, -0.58],
+      [-0.54, -0.58],
+      [-3.26, -0.58]
+    ],
+    0.08,
     0.025,
     0.025
   );
-  const wingMesh = new THREE.Mesh(a10Wing, mats.navalGray);
-  wingMesh.position.set(0, -0.06, 0.18);
-  jet.add(wingMesh);
+  batcher.add('root', 'navalGray', a10WingGeo, 0, -0.07, 0.18);
+  const wingTipGeo = getRoundedBoxGeo(0.16, 0.12, 0.88, 0.03, 1);
+  batcher.add('root', 'darkSteel', wingTipGeo, -3.34, -0.02, 0.06);
+  batcher.add('root', 'darkSteel', wingTipGeo, 3.34, -0.02, 0.06);
+  batcher.add('root', 'shtoraRed', getRoundedBoxGeo(0.06, 0.06, 0.14, 0.015, 1), -3.41, -0.01, 0.24);
+  batcher.add('root', 'opticGreen', getRoundedBoxGeo(0.06, 0.06, 0.14, 0.015, 1), 3.41, -0.01, 0.24);
 
+  // 4 underwing pylons + Maverick/Mk-82 ordnance (olive body + steel nose tip)
+  const pylonGeo = getRoundedBoxGeo(0.08, 0.18, 0.62, 0.02, 1);
+  const ordBodyGeo = getChamferedCylinderGeo(0.092, 0.092, 0.76, 8, 0.02);
+  const ordNoseGeo = getChamferedCylinderGeo(0.015, 0.092, 0.20, 8, 0.01);
+  const ordFinGeo = getRoundedBoxGeo(0.24, 0.03, 0.14, 0.008, 1);
   for (const px of [-2.3, -1.5, 1.5, 2.3]) {
-    addBox(jet, 0.08, 0.16, 0.55, mats.darkSteel, px, -0.14, 0.15);
-    addCyl(jet, 0.095, 0.095, 0.92, 8, mats.olive, px, -0.26, 0.15, Math.PI / 2, 0, 0);
+    batcher.add('root', 'darkSteel', pylonGeo, px, -0.14, 0.16);
+    batcher.add('root', 'olive', ordBodyGeo, px, -0.28, 0.14, Math.PI * 0.5, 0, 0);
+    batcher.add('root', 'steel', ordNoseGeo, px, -0.28, 0.61, Math.PI * 0.5, 0, 0);
+    batcher.add('root', 'gunmetal', ordFinGeo, px, -0.28, -0.16);
+    batcher.add('root', 'gunmetal', ordFinGeo, px, -0.28, -0.16, 0, 0, Math.PI * 0.5);
   }
 
+  // Twin dorsal TF34 nacelles with intake ring, nozzle shroud & contained afterburner
+  const strutGeo = getRoundedBoxGeo(0.46, 0.11, 0.68, 0.025, 1);
+  const nacelleGeo = createLatheAlongZGeo(
+    [
+      [0.19, -0.82],
+      [0.26, -0.64],
+      [0.295, 0.0],
+      [0.285, 0.62],
+      [0.22, 0.78]
+    ],
+    12
+  );
+  const intakeRingGeo = getChamferedCylinderGeo(0.245, 0.245, 0.09, 12, 0.02);
+  const exhaustShroudGeo = getChamferedCylinderGeo(0.18, 0.215, 0.16, 10, 0.02);
+  const afterburnerGeo = getChamferedCylinderGeo(0.135, 0.06, 0.18, 8, 0.02);
   for (const ex of [-0.68, 0.68]) {
-    addCyl(jet, 0.28, 0.26, 1.58, 12, mats.darkSteel, ex, 0.48, -1.15, Math.PI / 2, 0, 0);
-    addCyl(jet, 0.22, 0.22, 0.06, 10, mats.steel, ex, 0.48, -0.35, Math.PI / 2, 0, 0);
-    addCyl(jet, 0.2, 0.2, 0.14, 10, mats.afterburner, ex, 0.48, -1.96, Math.PI / 2, 0, 0);
+    batcher.add('root', 'darkSteel', strutGeo, ex * 0.6, 0.29, -1.08, 0, 0, ex > 0 ? 0.38 : -0.38);
+    batcher.add('root', 'darkSteel', nacelleGeo, ex, 0.48, -1.16);
+    batcher.add('root', 'steel', intakeRingGeo, ex, 0.48, -0.35, Math.PI * 0.5, 0, 0);
+    batcher.add('root', 'gunmetal', exhaustShroudGeo, ex, 0.48, -1.97, Math.PI * 0.5, 0, 0);
+    batcher.add('root', 'afterburner', afterburnerGeo, ex, 0.48, -2.03, Math.PI * 0.5, 0, 0);
   }
 
-  addBox(jet, 2.48, 0.1, 0.62, mats.navalGray, 0, 0.14, -2.18);
-  addBox(jet, 0.1, 0.98, 0.68, mats.darkSteel, -1.2, 0.46, -2.2);
-  addBox(jet, 0.1, 0.98, 0.68, mats.darkSteel, 1.2, 0.46, -2.2);
+  // Twin vertical chamfered empennage + horizontal stabilizer
+  const hTailGeo = createPlanExtrudeGeo(
+    [
+      [-1.26, 0.24],
+      [1.26, 0.24],
+      [1.14, -0.34],
+      [-1.14, -0.34]
+    ],
+    0.07,
+    0.02,
+    0.02
+  );
+  batcher.add('root', 'navalGray', hTailGeo, 0, 0.11, -2.18);
 
+  const vFinGeo = createSideExtrudeGeo(
+    [
+      [0.34, -0.04],
+      [0.16, 0.92],
+      [-0.26, 0.92],
+      [-0.36, -0.04]
+    ],
+    0.07,
+    0.02,
+    0.02
+  );
+  const finCapGeo = getRoundedBoxGeo(0.08, 0.14, 0.44, 0.02, 1);
+  for (const vx of [-1.22, 1.22]) {
+    batcher.add('root', 'darkSteel', vFinGeo, vx, 0.14, -2.18);
+    batcher.add('root', 'navalGray', finCapGeo, vx, 1.02, -2.23);
+  }
+
+  batcher.flush({ root: jet }, mats);
   enableShadows(jet, true, false);
   return jet;
 }
@@ -2910,49 +3017,121 @@ export function createB52Bomber3D(): THREE.Group {
   const jet = new THREE.Group();
   const mats = getMats();
   jet.scale.setScalar(1.35);
+  const batcher = new StaticMeshBatcher('b52_bomber', 1, null);
 
-  const fuseGeo = createLatheAlongZGeo([
-    [0.01, 4.2],
-    [0.34, 3.2],
-    [0.46, 1.8],
-    [0.46, -2.4],
-    [0.24, -3.9],
-    [0.01, -4.15]
-  ]);
-  jet.add(new THREE.Mesh(fuseGeo, mats.navalGray));
-  addBox(jet, 0.56, 0.28, 1.05, mats.glass, 0, 0.36, 2.55, 0.12, 0, 0);
+  // Long strategic bomber fuselage (-Z -> +Z) + darkSteel nose radome & ventral chin pod
+  const fuseGeo = createLatheAlongZGeo(
+    [
+      [0.005, -4.25],
+      [0.14, -4.05],
+      [0.34, -3.35],
+      [0.48, -1.85],
+      [0.47, 2.20],
+      [0.38, 3.15],
+      [0.24, 3.78]
+    ],
+    14
+  );
+  batcher.add('root', 'navalGray', fuseGeo);
+  const radomeGeo = createLatheAlongZGeo(
+    [
+      [0.24, 3.76],
+      [0.16, 4.02],
+      [0.005, 4.28]
+    ],
+    12
+  );
+  batcher.add('root', 'darkSteel', radomeGeo);
+  batcher.add('root', 'navalGray', getRoundedBoxGeo(0.32, 0.14, 4.35, 0.05, 1), 0, 0.44, -0.15);
+  batcher.add('root', 'darkSteel', getRoundedBoxGeo(0.28, 0.16, 0.85, 0.05, 1), 0, -0.34, 2.75);
 
+  // Stepped armored cockpit brow + glazed windshield
+  batcher.add('root', 'darkSteel', getRoundedBoxGeo(0.62, 0.24, 1.16, 0.05, 1), 0, 0.33, 2.48, 0.12, 0, 0);
+  batcher.add('root', 'glass', getRoundedBoxGeo(0.54, 0.19, 0.94, 0.045, 1), 0, 0.37, 2.56, 0.14, 0, 0);
+
+  // Broad swept wings + wingtip drop tanks & outrigger gear pods
   const wingGeo = createPlanExtrudeGeo(
     [
-      [0, 1.4],
-      [1.1, 0.75],
-      [5.4, -1.55],
-      [5.1, -2.15],
-      [0.85, -0.8],
-      [0, -0.95],
-      [-0.85, -0.8],
-      [-5.1, -2.15],
-      [-5.4, -1.55],
-      [-1.1, 0.75]
+      [0, 1.42],
+      [1.15, 0.78],
+      [5.45, -1.55],
+      [5.15, -2.18],
+      [0.88, -0.82],
+      [0, -0.98],
+      [-0.88, -0.82],
+      [-5.15, -2.18],
+      [-5.45, -1.55],
+      [-1.15, 0.78]
     ],
-    0.11,
+    0.09,
     0.025,
     0.025
   );
-  const wing = new THREE.Mesh(wingGeo, mats.navalGray);
-  wing.position.set(0, 0.16, 0.25);
-  jet.add(wing);
+  batcher.add('root', 'navalGray', wingGeo, 0, 0.12, 0.25);
 
-  // 8 iconic TF33 turbofans in 4 twin pods under the swept wings
-  for (const [px, pz] of [[-1.95, 0.05], [-3.35, -0.65], [1.95, 0.05], [3.35, -0.65]]) {
-    addBox(jet, 0.48, 0.26, 1.35, mats.darkSteel, px, -0.18, pz);
-    addCyl(jet, 0.12, 0.12, 0.15, 8, mats.afterburner, px - 0.12, -0.18, pz - 0.72, Math.PI / 2, 0, 0);
-    addCyl(jet, 0.12, 0.12, 0.15, 8, mats.afterburner, px + 0.12, -0.18, pz - 0.72, Math.PI / 2, 0, 0);
+  const tipTankGeo = getChamferedCylinderGeo(0.11, 0.11, 1.15, 8, 0.03);
+  const tipNoseGeo = getChamferedCylinderGeo(0.018, 0.11, 0.22, 8, 0.01);
+  const outriggerGeo = getRoundedBoxGeo(0.09, 0.24, 0.32, 0.02, 1);
+  for (const sx of [-1, 1]) {
+    batcher.add('root', 'navalGray', tipTankGeo, sx * 5.28, 0.02, -1.85, Math.PI * 0.5, 0, 0);
+    batcher.add('root', 'darkSteel', tipNoseGeo, sx * 5.28, 0.02, -1.18, Math.PI * 0.5, 0, 0);
+    batcher.add('root', 'darkSteel', outriggerGeo, sx * 4.85, -0.04, -1.78);
   }
 
-  addBox(jet, 0.12, 1.65, 1.15, mats.darkSteel, 0, 0.92, -3.35, -0.25, 0, 0);
-  addBox(jet, 2.75, 0.09, 0.75, mats.navalGray, 0, 0.24, -3.5);
+  // 8 TF33 turbofans in 4 twin underwing pods (darkSteel cowling + steel intake ring + contained afterburner)
+  const podPylonGeo = getRoundedBoxGeo(0.13, 0.24, 1.05, 0.03, 1);
+  const podBridgeGeo = getRoundedBoxGeo(0.44, 0.18, 1.18, 0.045, 1);
+  const engBarrelGeo = getChamferedCylinderGeo(0.135, 0.125, 1.28, 8, 0.025);
+  const engIntakeGeo = getChamferedCylinderGeo(0.128, 0.128, 0.08, 8, 0.015);
+  const engNozzleGeo = getChamferedCylinderGeo(0.10, 0.115, 0.12, 8, 0.015);
+  const engBurnerGeo = getChamferedCylinderGeo(0.08, 0.03, 0.14, 6, 0.015);
+  for (const [px, pz] of [
+    [-1.95, 0.05],
+    [-3.35, -0.65],
+    [1.95, 0.05],
+    [3.35, -0.65]
+  ]) {
+    batcher.add('root', 'darkSteel', podPylonGeo, px, -0.02, pz + 0.14);
+    batcher.add('root', 'darkSteel', podBridgeGeo, px, -0.20, pz);
+    for (const dx of [-0.14, 0.14]) {
+      batcher.add('root', 'darkSteel', engBarrelGeo, px + dx, -0.20, pz + 0.02, Math.PI * 0.5, 0, 0);
+      batcher.add('root', 'steel', engIntakeGeo, px + dx, -0.20, pz + 0.67, Math.PI * 0.5, 0, 0);
+      batcher.add('root', 'gunmetal', engNozzleGeo, px + dx, -0.20, pz - 0.64, Math.PI * 0.5, 0, 0);
+      batcher.add('root', 'afterburner', engBurnerGeo, px + dx, -0.20, pz - 0.72, Math.PI * 0.5, 0, 0);
+    }
+  }
 
+  // Tall swept vertical tail fin & swept horizontal tailplane
+  const vTailGeo = createSideExtrudeGeo(
+    [
+      [0.65, -0.05],
+      [0.05, 1.68],
+      [-0.55, 1.68],
+      [-0.55, -0.05]
+    ],
+    0.09,
+    0.025,
+    0.025
+  );
+  batcher.add('root', 'darkSteel', vTailGeo, 0, 0.25, -3.35);
+  batcher.add('root', 'navalGray', getRoundedBoxGeo(0.10, 0.16, 0.62, 0.025, 1), 0, 1.90, -3.60);
+
+  const hTailGeo = createPlanExtrudeGeo(
+    [
+      [0, 0.35],
+      [1.45, -0.18],
+      [1.22, -0.62],
+      [0, -0.36],
+      [-1.22, -0.62],
+      [-1.45, -0.18]
+    ],
+    0.07,
+    0.02,
+    0.02
+  );
+  batcher.add('root', 'navalGray', hTailGeo, 0, 0.20, -3.45);
+
+  batcher.flush({ root: jet }, mats);
   enableShadows(jet, true, false);
   return jet;
 }
@@ -2964,52 +3143,73 @@ export function createMissileMesh3D(kind: string): THREE.Group {
   const isBig = kind === 'hellfire' || kind === 'patriot' || kind.startsWith('boss_');
   const r = kind === 'hellfire' ? 0.155 : isBoss ? 0.13 : isBig ? 0.115 : 0.085;
   const len = kind === 'hellfire' ? 1.48 : isBoss ? 1.15 : isBig ? 1.15 : 0.85;
-  const bodyMat =
+  const bodyMatKey =
     kind === 'patriot'
-      ? mats.navalWhite
+      ? 'navalWhite'
       : kind === 'enemy_emp'
-        ? mats.empPurple
+        ? 'empPurple'
         : kind === 'enemy_acid' || kind === 'toxic'
-          ? mats.opticGreen
+          ? 'opticGreen'
           : kind === 'enemy_cryo' || kind === 'cryo'
-            ? mats.radarCyan
+            ? 'radarCyan'
             : isBoss
-              ? mats.shtoraRed
+              ? 'shtoraRed'
               : kind === 'hellfire'
-                ? mats.darkSteel
-                : mats.olive;
+                ? 'darkSteel'
+                : 'olive';
+  const tipMatKey = kind === 'hellfire' || isBoss ? 'amberGlow' : 'steel';
 
-  const bodyGeo = createLatheAlongZGeo([
-    [0.001, len * 0.72],
-    [r * 0.72, len * 0.56],
-    [r, len * 0.42],
-    [r, -len * 0.46],
-    [r * 0.78, -len * 0.52]
-  ]);
-  g.add(new THREE.Mesh(bodyGeo, bodyMat));
+  const batcher = new StaticMeshBatcher(`missile_${r.toFixed(3)}_${len.toFixed(2)}`, 1, null);
 
-  addCyl(
-    g,
-    r * 0.35,
-    r * 0.7,
-    len * 0.14,
-    8,
-    kind === 'hellfire' || isBoss ? mats.amberGlow : mats.steel,
-    0,
-    0,
-    len * 0.58,
-    Math.PI / 2,
-    0,
-    0
+  // Smooth ogive missile body (ordered -Z -> +Z for outward Lathe normals)
+  const bodyGeo = createLatheAlongZGeo(
+    [
+      [0.001, -len * 0.53],
+      [r * 0.80, -len * 0.52],
+      [r, -len * 0.44],
+      [r, len * 0.36],
+      [r * 0.78, len * 0.52],
+      [r * 0.42, len * 0.64],
+      [0.001, len * 0.74]
+    ],
+    10
   );
+  batcher.add('root', bodyMatKey, bodyGeo);
 
-  addBox(g, r * 3.8, r * 0.35, len * 0.22, mats.gunmetal, 0, 0, -len * 0.36);
-  addBox(g, r * 0.35, r * 3.8, len * 0.22, mats.gunmetal, 0, 0, -len * 0.36);
+  // Seeker tip & brass/steel structural collar rings
+  const seekerGeo = getChamferedCylinderGeo(r * 0.36, r * 0.74, len * 0.11, 8, Math.min(0.01, r * 0.1));
+  batcher.add('root', tipMatKey, seekerGeo, 0, 0, len * 0.58, Math.PI * 0.5, 0, 0);
 
-  const exhaustGeo = getGeo(`exhaust_${r}`, () => new THREE.ConeGeometry(r * 0.9, 0.36, 8));
+  const collarGeo = getChamferedCylinderGeo(r * 1.07, r * 1.07, len * 0.055, 8, Math.min(0.008, r * 0.08));
+  batcher.add('root', 'brass', collarGeo, 0, 0, len * 0.24, Math.PI * 0.5, 0, 0);
+  batcher.add('root', 'steel', collarGeo, 0, 0, -len * 0.16, Math.PI * 0.5, 0, 0);
+
+  // Chamfered cruciform fins & aft thruster nozzle
+  const finBevel = Math.max(0.003, r * 0.06);
+  const finHGeo = getRoundedBoxGeo(r * 3.8, r * 0.24, len * 0.22, finBevel, 1);
+  const finVGeo = getRoundedBoxGeo(r * 0.24, r * 3.8, len * 0.22, finBevel, 1);
+  batcher.add('root', 'gunmetal', finHGeo, 0, 0, -len * 0.34);
+  batcher.add('root', 'gunmetal', finVGeo, 0, 0, -len * 0.34);
+
+  const nozzleGeo = getChamferedCylinderGeo(r * 0.72, r * 0.92, len * 0.12, 8, Math.min(0.014, r * 0.12));
+  batcher.add('root', 'gunmetal', nozzleGeo, 0, 0, -len * 0.54, Math.PI * 0.5, 0, 0);
+
+  batcher.flush({ root: g }, mats);
+
+  // Contained afterburner plume (strictly noShadow = true)
+  const exhaustGeo = createLatheAlongZGeo(
+    [
+      [0.001, -len * 0.88],
+      [r * 0.56, -len * 0.72],
+      [r * 0.76, -len * 0.58],
+      [0.001, -len * 0.56]
+    ],
+    8
+  );
   const exhaust = new THREE.Mesh(exhaustGeo, mats.afterburner);
-  exhaust.rotation.x = -Math.PI / 2;
-  exhaust.position.z = -len * 0.68;
+  exhaust.userData.noShadow = true;
+  exhaust.castShadow = false;
+  exhaust.receiveShadow = false;
   g.add(exhaust);
 
   return g;

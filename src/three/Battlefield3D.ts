@@ -556,11 +556,40 @@ export class Battlefield3D {
   private supportReticleGroup = new THREE.Group();
   private stealthLockGroup = new THREE.Group();
 
-  private bulletGeo = new THREE.BoxGeometry(0.1, 0.1, 1.35);
+  private bulletGeo = (() => {
+    const geo = new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.0, -0.68),
+        new THREE.Vector2(0.034, -0.68),
+        new THREE.Vector2(0.052, -0.22),
+        new THREE.Vector2(0.050, 0.18),
+        new THREE.Vector2(0.030, 0.48),
+        new THREE.Vector2(0.0, 0.68)
+      ],
+      8
+    );
+    geo.rotateX(Math.PI / 2);
+    return geo;
+  })();
   private bulletMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
   private sabotMat = new THREE.MeshBasicMaterial({ color: 0xfb923c });
   private bossBulletMat = new THREE.MeshBasicMaterial({ color: 0xff3b3b });
-  private shellGeo = new THREE.SphereGeometry(0.18, 8, 6);
+  private shellGeo = (() => {
+    const geo = new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.0, -0.24),
+        new THREE.Vector2(0.11, -0.24),
+        new THREE.Vector2(0.15, -0.10),
+        new THREE.Vector2(0.15, 0.08),
+        new THREE.Vector2(0.115, 0.21),
+        new THREE.Vector2(0.055, 0.30),
+        new THREE.Vector2(0.0, 0.34)
+      ],
+      10
+    );
+    geo.rotateX(Math.PI / 2);
+    return geo;
+  })();
   private shellMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xd97706, emissiveIntensity: 1.8 });
   private bossShellMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xdc2626, emissiveIntensity: 2.2 });
   private laserBeamGeo = new THREE.CylinderGeometry(0.11, 0.11, 1, 8, 1, false);
@@ -580,7 +609,7 @@ export class Battlefield3D {
     depthWrite: false,
     blending: THREE.AdditiveBlending
   });
-  private ewPulseGeo = new THREE.RingGeometry(0.92, 1.0, 48);
+  private ewPulseGeo = new THREE.RingGeometry(0.965, 1.0, 48);
   private ownerRingGeo = new THREE.RingGeometry(1.90, 1.99, 36);
   private pingBeaconGeo = new THREE.CylinderGeometry(0.14, 0.24, 9.5, 10, 1, true);
   private pingRingGeo = new THREE.RingGeometry(0.65, 0.9, 28);
@@ -1119,11 +1148,16 @@ export class Battlefield3D {
     }
   }
 
-  setQualityTier(tier: QualityTier, persist = true) {
+  setQualityTier(
+    tier: QualityTier,
+    persist = true,
+    sourceOverride?: ResolvedQualityConfig['source']
+  ) {
     const nextProfile = applyOverridesToProfile(tier, this.qualityConfig.overrides);
     this.qualityConfig = {
       ...this.qualityConfig,
       tier,
+      source: sourceOverride ?? this.qualityConfig.source,
       profile: nextProfile
     };
     if (persist) {
@@ -1148,6 +1182,10 @@ export class Battlefield3D {
       this.lastStageVisuals.rimColor,
       this.lastStageVisuals.hasFogCells
     );
+    bus.emit('quality:changed', {
+      tier: this.qualityConfig.tier,
+      source: this.qualityConfig.source
+    });
   }
 
   getVisualPipelineInfo() {
@@ -1793,6 +1831,12 @@ export class Battlefield3D {
       bus.on('cmd:cancelTool', () => this.cancelActiveTool()),
       bus.on('cmd:startWave', () => this.startNextWave(true)),
       bus.on('cmd:setSpeed', (speed: number) => this.setSpeed(speed)),
+      bus.on('cmd:setQuality', ({ tier }: { tier: QualityTier }) => {
+        if (!tier) return;
+        this.adaptiveEnabled = false;
+        this.setQualityTier(tier, true, 'storage');
+        this.emitFullHudSync();
+      }),
       bus.on('cmd:upgradeTower', () => this.upgradeSelectedTower()),
       bus.on('cmd:specializeTower', ({ branch }: { branch: 'A' | 'B' }) => this.specializeSelectedTower(branch)),
       bus.on('cmd:repairTower', () => this.repairSelectedTower()),
@@ -3230,10 +3274,12 @@ export class Battlefield3D {
           color: pulseColors[towerId],
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.35,
+          opacity: 0.22,
+          blending: THREE.AdditiveBlending,
           depthWrite: false
         })
       );
+      pulseMesh.userData.noShadow = true;
       pulseMesh.rotation.x = -Math.PI / 2;
       pulseMesh.position.set(wx, 0.1, wz);
       this.scene.add(pulseMesh);
@@ -4575,7 +4621,7 @@ export class Battlefield3D {
             const rangeW = pulseRange * WORLD_SCALE;
             const p = (this.elapsedReal * 0.75) % 1;
             tower.ewPulseMesh.scale.setScalar(Math.max(0.05, p * rangeW));
-            (tower.ewPulseMesh.material as THREE.MeshBasicMaterial).opacity = 0.4 * (1 - p);
+            (tower.ewPulseMesh.material as THREE.MeshBasicMaterial).opacity = 0.22 * Math.pow(1 - p, 1.35);
           } else {
             tower.ewPulseMesh.visible = false;
           }
@@ -7713,6 +7759,8 @@ export class Battlefield3D {
 
     bus.emit('hud:state', {
       budget: localBudget,
+      qualityTier: this.qualityConfig.tier,
+      qualitySource: this.qualityConfig.source,
       warBonds: saveManager.getWarBonds(),
       worldId: this.currentWorldId,
       stageId: this.currentStageId,

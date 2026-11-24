@@ -49,6 +49,10 @@ html, body {
   display: none !important;
 }
 
+.show-sm-label {
+  display: none;
+}
+
 /* === TOP BAR === */
 .topbar {
   min-height: 50px;
@@ -1529,6 +1533,105 @@ html, body {
   border-color: rgba(56, 189, 248, 0.35);
 }
 
+.quality-settings-card {
+  border-color: rgba(56, 189, 248, 0.32);
+}
+
+.quality-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+  white-space: nowrap;
+}
+
+.quality-mode-badge.is-manual {
+  background: rgba(250, 204, 21, 0.14);
+  border-color: rgba(250, 204, 21, 0.48);
+  color: #fde047;
+}
+
+.quality-segmented {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  background: #070e15;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px;
+}
+
+.btn-quality-tier {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 7px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-quality-tier:hover {
+  color: var(--text);
+  background: rgba(30, 50, 70, 0.55);
+}
+
+.btn-quality-tier.active {
+  background: linear-gradient(180deg, #0284c7 0%, #0369a1 100%);
+  border-color: #38bdf8;
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+}
+
+.help-quality-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 9px 11px;
+  margin-bottom: 12px;
+  background: rgba(11, 19, 27, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.help-quality-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.help-quality-label {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.quality-segmented-compact {
+  flex: 1 1 220px;
+  max-width: 300px;
+  padding: 3px;
+}
+
+.quality-segmented-compact .btn-quality-tier {
+  font-size: 11px;
+  padding: 5px 6px;
+}
+
 .save-sec-head {
   display: flex;
   justify-content: space-between;
@@ -1647,26 +1750,57 @@ html, body {
 
 /* Small Tablets & Large Phones Portrait */
 @media (max-width: 640px) {
+  .hide-sm-label {
+    display: none;
+  }
+  .show-sm-label {
+    display: inline;
+  }
+  .topbar {
+    padding: max(4px, env(safe-area-inset-top)) 6px 5px;
+    gap: 4px 6px;
+  }
   .brand-title {
     font-size: 13.5px;
   }
+  .telemetry-group {
+    gap: 7px;
+  }
+  .metric {
+    line-height: 1.1;
+  }
   .metric-value {
-    font-size: 14px;
+    font-size: 12.5px;
   }
   .metric-label {
-    font-size: 10px;
+    font-size: 9px;
+    letter-spacing: 0.1px;
+  }
+  .metric-wb {
+    padding: 2px 5px;
+  }
+  .controls-group {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    gap: 5px;
   }
   .btn-save-pill,
+  .btn-coop,
   .btn-campaign,
   .btn-wave,
-  .btn-install-pwa {
-    font-size: 11.5px;
-    padding: 6px 10px;
+  .btn-install-pwa,
+  .btn-repair-all {
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+  .btn-speed {
+    font-size: 11px;
+    padding: 5px 8px;
   }
   .btn-icon {
-    width: 32px;
-    height: 32px;
-    font-size: 14px;
+    width: 30px;
+    height: 30px;
+    font-size: 13.5px;
   }
 
   .build-card {
@@ -1753,6 +1887,7 @@ html, body {
   .telemetry-group {
     width: 100%;
     justify-content: space-between;
+    gap: 5px;
   }
   .controls-group {
     width: 100%;

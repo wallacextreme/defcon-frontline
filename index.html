@@ -33,11 +33,11 @@
             <span class="metric-value text-green" id="hud-budget">$750</span>
           </div>
           <div class="metric metric-wb" title="Créditos de Comando Permanentes usados no Arsenal Pré-Fase">
-            <span class="metric-label">🎖️ WAR BONDS</span>
+            <span class="metric-label">🎖️ <span class="hide-sm-label">WAR BONDS</span><span class="show-sm-label">WB$</span></span>
             <span class="metric-value text-amber" id="hud-wb">250 WB$</span>
           </div>
           <div class="metric">
-            <span class="metric-label">FOB HQ</span>
+            <span class="metric-label">FOB<span class="hide-sm-label"> HQ</span></span>
             <span class="metric-value text-cyan" id="hud-fob">20 / 20</span>
           </div>
           <div class="metric">
@@ -64,16 +64,16 @@
 
         <div class="controls-group">
           <button class="btn-install-pwa hidden" id="btn-install-pwa" title="Instalar App no Celular / PC">
-            📲 INSTALAR APP
+            📲 <span class="hide-sm-label">INSTALAR </span>APP
           </button>
           <button class="btn-save-pill" id="btn-save-menu" title="Autosave ativo (Navegador e App Windows .exe/.msi). Clique para Slots & Backup">
             💾 SALVO
           </button>
           <button class="btn-coop" id="btn-coop" title="Lobby Co-op 1–4 Jogadores (WebRTC PeerJS + Aba Local)">
-            🌐 CO-OP SQUAD (1-4P)
+            🌐 CO-OP<span class="hide-sm-label"> SQUAD (1-4P)</span>
           </button>
           <button class="btn-campaign" id="btn-campaign" title="Abrir Mapa de Mundos, Fases e Arsenal Permanente">
-            🗺️ MAPA DE MUNDOS &amp; ARSENAL
+            🗺️ <span class="hide-sm-label">MAPA DE </span>MUNDOS<span class="hide-sm-label"> &amp; ARSENAL</span>
           </button>
           <div class="speed-group">
             <button class="btn-speed" data-speed="0" title="Pausa Tática [Space]">❚❚</button>
@@ -349,6 +349,24 @@
             </div>
           </div>
 
+          <div class="save-section-card quality-settings-card">
+            <div class="save-sec-head">
+              <div>
+                <strong>QUALIDADE GRÁFICA 3D &amp; DESEMPENHO</strong>
+                <div class="save-sec-sub" id="quality-status-text">
+                  Ajuste o nível visual 3D ou deixe o sistema adaptar automaticamente conforme o FPS.
+                </div>
+              </div>
+              <span class="quality-mode-badge" id="quality-mode-badge">ALTO • AUTO</span>
+            </div>
+            <div class="quality-segmented" id="quality-segmented" role="group" aria-label="Qualidade Gráfica 3D">
+              <button type="button" class="btn-quality-tier" data-quality="low">BAIXO</button>
+              <button type="button" class="btn-quality-tier" data-quality="medium">MÉDIO</button>
+              <button type="button" class="btn-quality-tier" data-quality="high">ALTO</button>
+              <button type="button" class="btn-quality-tier" data-quality="ultra">ULTRA</button>
+            </div>
+          </div>
+
           <div class="arsenal-section-label">SLOTS DE SAVE MANUAL (CAMPANHA + BATALHA EM ANDAMENTO)</div>
           <div class="save-slots-grid" id="save-slots-grid"></div>
 
@@ -426,6 +444,18 @@
           <li><strong>Câmera Tática 3D:</strong> Arraste <code>Botão Esquerdo</code> para orbitar, <code>Botão Direito</code> ou <code>WASD</code> para mover, <code>Scroll</code> para zoom.</li>
           <li><strong>Atalhos:</strong> <code>[1-9, 0, -, =]</code> Construir | <code>[Q]</code> A-10 | <code>[E]</code> Hellfire | <code>[B]</code> B-52 | <code>[R]</code> Reparar torre | <code>[Space]</code> Pausa | <code>[Shift+Click]</code> Contínuo.</li>
         </ul>
+        <div class="help-quality-row">
+          <div class="help-quality-info">
+            <span class="help-quality-label">QUALIDADE GRÁFICA 3D:</span>
+            <span class="quality-mode-badge" id="help-quality-badge">ALTO • AUTO</span>
+          </div>
+          <div class="quality-segmented quality-segmented-compact" id="help-quality-segmented" role="group" aria-label="Qualidade Gráfica 3D">
+            <button type="button" class="btn-quality-tier" data-quality="low">BAIXO</button>
+            <button type="button" class="btn-quality-tier" data-quality="medium">MÉDIO</button>
+            <button type="button" class="btn-quality-tier" data-quality="high">ALTO</button>
+            <button type="button" class="btn-quality-tier" data-quality="ultra">ULTRA</button>
+          </div>
+        </div>
         <button class="btn-primary" id="btn-close-help">RETORNAR AO COMANDO</button>
       </div>
     </div>
