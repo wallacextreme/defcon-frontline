@@ -1,7 +1,7 @@
 {
   "name": "DEFCON: Frontline — Tactical Tower Defense",
   "short_name": "DEFCON TD",
-  "description": "C4ISR 3D Tactical Tower Defense — 3 Worlds, 15 Stages & Offline Save",
+  "description": "C4ISR 3D Tactical Tower Defense — 4 Worlds, 20 Stages, 23 Towers & Offline Save",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

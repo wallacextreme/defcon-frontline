@@ -1,4 +1,4 @@
-const CACHE_NAME = 'defcon-frontline-pwa-v6';
+const CACHE_NAME = 'defcon-frontline-pwa-v7';
 const PRECACHE_URLS = [
   './',
   './index.html',
