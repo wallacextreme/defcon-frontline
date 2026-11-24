@@ -613,6 +613,31 @@ export function getPBRTextures(maxAnisotropy = cachedAnisotropy): Record<string,
   return cachedTextures;
 }
 
+const repeatedTextureSetCache = new Map<string, PBRTextureSet>();
+
+function getRepeatedPBRTextureSet(key: string, baseSet: PBRTextureSet, repeat: [number, number]): PBRTextureSet {
+  const cacheKey = `${key}:${repeat[0]}:${repeat[1]}`;
+  const existing = repeatedTextureSetCache.get(cacheKey);
+  if (existing) return existing;
+
+  const map = baseSet.map.clone();
+  const bumpMap = baseSet.bumpMap.clone();
+  const normalMap = baseSet.normalMap.clone();
+  const roughnessMap = baseSet.roughnessMap.clone();
+  map.repeat.set(repeat[0], repeat[1]);
+  bumpMap.repeat.set(repeat[0], repeat[1]);
+  normalMap.repeat.set(repeat[0], repeat[1]);
+  roughnessMap.repeat.set(repeat[0], repeat[1]);
+  map.needsUpdate = true;
+  bumpMap.needsUpdate = true;
+  normalMap.needsUpdate = true;
+  roughnessMap.needsUpdate = true;
+
+  const clonedSet: PBRTextureSet = { map, bumpMap, normalMap, roughnessMap };
+  repeatedTextureSetCache.set(cacheKey, clonedSet);
+  return clonedSet;
+}
+
 /**
  * Helper to create a MeshStandardMaterial wired to a cached PBR texture set.
  */
@@ -621,29 +646,13 @@ export function createPBRMaterial(
   overrides: THREE.MeshStandardMaterialParameters & { repeat?: [number, number] } = {}
 ): THREE.MeshStandardMaterial {
   const sets = getPBRTextures();
-  const set = sets[key] || sets.natoArmorPlate;
+  const resolvedKey = sets[key] ? key : 'natoArmorPlate';
+  const baseSet = sets[resolvedKey];
   const { repeat, ...matParams } = overrides;
   const hasExplicitBump = matParams.bumpMap != null;
 
-  let map = set.map;
-  let bumpMap = set.bumpMap;
-  let normalMap = set.normalMap;
-  let roughnessMap = set.roughnessMap;
-
-  if (repeat) {
-    map = set.map.clone();
-    bumpMap = set.bumpMap.clone();
-    normalMap = set.normalMap.clone();
-    roughnessMap = set.roughnessMap.clone();
-    map.repeat.set(repeat[0], repeat[1]);
-    bumpMap.repeat.set(repeat[0], repeat[1]);
-    normalMap.repeat.set(repeat[0], repeat[1]);
-    roughnessMap.repeat.set(repeat[0], repeat[1]);
-    map.needsUpdate = true;
-    bumpMap.needsUpdate = true;
-    normalMap.needsUpdate = true;
-    roughnessMap.needsUpdate = true;
-  }
+  const activeSet = repeat ? getRepeatedPBRTextureSet(resolvedKey, baseSet, repeat) : baseSet;
+  const { map, bumpMap, normalMap, roughnessMap } = activeSet;
 
   const baseParams: THREE.MeshStandardMaterialParameters = {
     map,

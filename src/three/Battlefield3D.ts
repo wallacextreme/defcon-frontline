@@ -84,7 +84,11 @@ import {
   DioramaHandles,
   WorldBiome
 } from './TerrainDiorama3D.ts';
-import { createDesertTerrainWarmMesh } from './TerrainSplatting3D.ts';
+import {
+  createDesertTerrainWarmMesh,
+  createBiomeTerrainWarmMesh
+} from './TerrainSplatting3D.ts';
+import { createBiomePropsWarmMeshes } from './BiomeProps3D.ts';
 import { Effects3D } from './Effects3D.ts';
 
 export const MAP_WIDTH = GRID_COLS * TILE_SIZE;
@@ -433,6 +437,7 @@ export class Battlefield3D {
   private flashLightTimers = [0, 0];
 
   private biomeEnv: BiomeEnvironmentHandle | null = null;
+  private lastBiomeEnvSignature = '';
   private currentBiome: WorldBiome = 'desert';
   private qualityConfig!: ResolvedQualityConfig;
   private qualitySampler!: AdaptiveQualitySampler;
@@ -842,6 +847,8 @@ export class Battlefield3D {
     warmRuntimeGroup.add(new THREE.Mesh(this.bulletGeo, this.bulletMat));
     warmRuntimeGroup.add(new THREE.Mesh(this.ruinGeo, this.ruinMat));
     warmRuntimeGroup.add(createDesertTerrainWarmMesh());
+    warmRuntimeGroup.add(createBiomeTerrainWarmMesh());
+    warmRuntimeGroup.add(...createBiomePropsWarmMeshes());
     this.scene.add(warmRuntimeGroup);
 
     // Compile against the active composer offscreen RT when composer is enabled so RenderPass
@@ -1011,26 +1018,41 @@ export class Battlefield3D {
     this.lastStageVisuals.rimColor = rimColor;
     this.lastStageVisuals.hasFogCells = hasFogCells;
 
-    // Dispose previous PMREM cube RT + skyDome BEFORE building next (0 leaks across 20 stages)
-    if (this.biomeEnv) {
-      this.biomeEnv.dispose();
-      this.biomeEnv = null;
+    const profile = this.qualityConfig.profile;
+    const envSignature = [
+      biome,
+      profile.iblMode,
+      profile.envEnabled ? 1 : 0,
+      skyColor ?? '',
+      fogColor ?? '',
+      sunColor ?? '',
+      rimColor ?? ''
+    ].join('|');
+
+    let handle = this.biomeEnv;
+    if (!handle || this.lastBiomeEnvSignature !== envSignature) {
+      // Dispose previous PMREM cube RT + skyDome BEFORE building next (0 leaks across 20 stages)
+      if (this.biomeEnv) {
+        this.biomeEnv.dispose();
+        this.biomeEnv = null;
+      }
+      handle = createBiomeEnvironment(this.renderer, biome, {
+        iblMode: profile.iblMode,
+        envEnabled: profile.envEnabled,
+        skyColorOverride: skyColor,
+        fogColorOverride: fogColor,
+        sunColorOverride: sunColor,
+        rimColorOverride: rimColor
+      });
+      this.biomeEnv = handle;
+      this.lastBiomeEnvSignature = envSignature;
+      this.scene.add(handle.skyDome);
+      this.scene.environment = handle.envMap;
+    } else if (!handle.skyDome.parent) {
+      this.scene.add(handle.skyDome);
     }
 
-    const profile = this.qualityConfig.profile;
-    const handle = createBiomeEnvironment(this.renderer, biome, {
-      iblMode: profile.iblMode,
-      envEnabled: profile.envEnabled,
-      skyColorOverride: skyColor,
-      fogColorOverride: fogColor,
-      sunColorOverride: sunColor,
-      rimColorOverride: rimColor
-    });
-    this.biomeEnv = handle;
     const spec = handle.lighting;
-
-    this.scene.add(handle.skyDome);
-    this.scene.environment = handle.envMap;
     this.scene.environmentIntensity = profile.envEnabled ? spec.envIntensity : 0;
 
     if (this.scene.background instanceof THREE.Color) {

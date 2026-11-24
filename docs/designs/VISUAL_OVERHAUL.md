@@ -2,9 +2,9 @@
 
 > **Projeto:** DEFCON: Frontline (`defcon-frontline`) — Tower Defense Militar 3D em Three.js r187 + Vite 7  
 > **Documento:** `docs/designs/VISUAL_OVERHAUL.md` (Logbook Persistente — Fonte de Verdade das Fases 0 a 6)  
-> **Data da Auditoria Fase 0:** 2026-11-21 | **Commits Aprovados:** F0 `eaff7f2` (`GATE G0`) · F1 `9d6eaf1` (`GATE G1`) · F2 `79f1f1a` (`GATE G2`)  
-> **Estado Atual:** 🟡 **FASE 3 CONCLUÍDA — 23/23 TORRES REMODELADAS & APROVADAS (`90,5 / 100`) — AGUARDANDO GATE G3**  
-> **Scorecard Independente (`reviewer-f3b`, `#93`):** **F0 `40,0` → F1 `65,3` → F2 `90,1` → Pré-Polish F3 `85,6` → Pós-Polish F3 `90,5 / 100` ✅ (`0 P0`, `0 P1`, 10/10 critérios ≥ 86% do peso)**.
+> **Data da Auditoria Fase 0:** 2026-11-21 | **Commits Aprovados:** F0 `eaff7f2` (`GATE G0`) · F1 `9d6eaf1` (`GATE G1`) · F2 `79f1f1a` (`GATE G2`) · F3 `09c2d4c` (`GATE G3`)  
+> **Estado Atual:** 🟡 **FASE 4 CONCLUÍDA — 7 BIOMAS & 20 FASES APROVADAS (`90,0 / 100`) — AGUARDANDO GATE G4**  
+> **Scorecard Independente (`reviewer-f4`, `#111`):** **F0 `40,0` → F1 `65,3` → F2 `90,1` → F3 `90,5` → F4 `90,0 / 100` ✅ (`0 P0`, `0 P1`, 10/10 critérios ≥ 81% do peso)**.
 
 ---
 
@@ -22,11 +22,14 @@ Este documento funciona simultaneamente como **pacote de decisão dos GATES (G0 
 - **Fase 2 (Vertical Slice: 5 Torres Hero `howitzer, patriot, tesla_tower, phalanx, ew_crew` + Mapa `1-1` Deserto — ✅ APROVADA NO GATE G2, commit `79f1f1a`):**
   1. **Terreno Macro+Detail Splatting `64 px/u` & Props `InstancedMesh` (`TerrainSplatting3D.ts`, `TerrainDiorama3D.ts`):** Fim das 520 "bolotas" `ctx.arc()`; splatmap RGBA `512×292` FBM + detail maps tileable `512×512` a `64 px/u` + decalque de estrada `2048×1170`; micro-relevo com `FREE`/`ROAD` em `y = 0` e proxy `groundPlane.visible = false`; 3 mesas rochosas assimétricas + Spawn/FOB heróis (`1-1` vazio `295 → 78` / `56` pós-ciclo).
   2. **5 Torres Hero Remodeladas (`MilitaryModels3D.ts`, `ProceduralPBRTextures.ts`, `Battlefield3D.ts`):** Chanfros, `mergeStaticGeometries`, `normalMap` Sobel contínuo, `metalness ≤ 0.05` em CARC, `5A/6B` distintos, `ownerRingMesh` sem clipping e ghost ciano/laranja em `5` calls (`reviewer-f2b` #68: **`90,1 / 100` ✅**).
-- **Fase 3 (Produção em Escala: Restantes 18 Torres nos 6 Estados — 🟡 CONCLUÍDA E APROVADA COM `90,5 / 100` ✅, AGUARDANDO GATE G3):**
-  1. **Arquitetura Modular (`TowerRigPrimitives.ts` + `src/three/towers/*.ts`):** Primitivas/materiais compartilhados extraídos para `TowerRigPrimitives.ts` e as 18 torres restantes implementadas em 4 módulos (`LegacyAndPrecisionTowers3D.ts`, `AreaAndMissileTowers3D.ts`, `ElementalTowers3D.ts`, `SupportTowers3D.ts`), integradas em `MilitaryModels3D.ts` (com remoção do `specRing`/`crownRing` legado, zero `addBox`/`addCyl` em torres, e `tests/visual-towers23.test.mjs` **31/31 PASS**).
-  2. **Métricas da Frota 23/23 & Performance:** Gallery `nv1` caiu de **`971 → 479` sceneCalls (`-50,7%` vs F1)**; `maxRLow ≤ 1.84`; `max tris = 3.710` (`howitzer@5A`, todas as 18 novas `≤ 3.414`); emissivo `bright(>=1.0) ≤ 1,46%` e `activeNonMetallic ≤ 3,30%` (meta `≤ 5%`); `1-1` Ultra com 7 torres `5A` em `279 sceneCalls / 559 fullCalls`; `low 59,9 FPS` / `medium 58,8 FPS p50`; `Δprograms = 0` em colocação/upgrades; ciclo 20 fases `Δgeo=0 / Δtex=0 / Δprog=0`; `0` console errors/warnings; `0` dev leaks em `dist/`.
-  3. **Auditoria & Polish (`reviewer-f3` `85,6` → Stage 3E → `reviewer-f3b` `90,5 / 100` ✅):** 3 P1s corrigidos (`ewRings` contidos em `[0.91, 1.01]` fora das estruturas, cunhas frontais do `abrams_pit` sem interpenetração, escudo/braços `ballista 5A`) + 4 P2s (`tos1_mlrs` fosco, `steel`/`diamondPlate` sem hotspot, `harpoon_tower 5A` `specTrimA`, `sniper_tower` X-bracing). Veja a **Seção 15**.
-- **Próximo passo após aprovação do GATE G3:** Fazer commit local da Fase 3 e iniciar a **Fase 4 (Restantes 6 Biomas / 19 Fases `1-2`..`4-5`, Células Especiais 3D, Props `InstancedMesh` + Cache `loadStage ≤ 120 ms` → GATE G4)**.
+- **Fase 3 (Produção em Escala: Restantes 18 Torres nos 6 Estados — ✅ APROVADA NO GATE G3, commit `09c2d4c`):**
+  1. **Arquitetura Modular (`TowerRigPrimitives.ts` + `src/three/towers/*.ts`):** Primitivas/materiais compartilhados extraídos para `TowerRigPrimitives.ts` e as 18 torres restantes implementadas em 4 módulos (`LegacyAndPrecisionTowers3D.ts`, `AreaAndMissileTowers3D.ts`, `ElementalTowers3D.ts`, `SupportTowers3D.ts`), integradas em `MilitaryModels3D.ts` (`tests/visual-towers23.test.mjs` **31/31 PASS**).
+  2. **Auditoria & Polish (`reviewer-f3` `85,6` → Stage 3E → `reviewer-f3b` `90,5 / 100` ✅):** Gallery `nv1` `-50,7%` (`971 → 479` calls), `max tris = 3.710`, emissivo `≤ 3,30%`, `0` erros/warnings.
+- **Fase 4 (7 Biomas, 20 Fases, Props `InstancedMesh` & 5 Superfícies Especiais — 🟡 CONCLUÍDA E APROVADA COM `90,0 / 100` ✅, AGUARDANDO GATE G4):**
+  1. **Terreno Splatting nos 7 Biomas (`TerrainSplatting3D.ts`, `TerrainDiorama3D.ts`):** Estendidos micro-relevo (`y === 0` em todas as células navegáveis/construíveis), splatmaps orgânicos (zero `ctx.arc()` / "bolotas"), decalques de estrada `2048×1170`, cache de detail textures por bioma e proxy `groundPlane.visible = false` com raycast validado em `4-3`.
+  2. **Props `InstancedMesh` & 5 Superfícies Especiais (`BiomeProps3D.ts`, `ProceduralPBRTextures.ts`, `Battlefield3D.ts`):** 100% dos obstáculos `CELL.ROCK` e props de curva instanciados (`frustumCulled = false`), vento GPU em folhagens (`defcon_foliage_wind_v1`) e 5 superfícies especiais dedicadas (`restricted`, `ice`, `fog` 2 camadas suaves, `toxic` `'defcon_toxic_pool_v1'`, `lava` `'defcon_lava_flow_v1'`).
+  3. **Métricas, Polish 4E & Auditoria (`reviewer-f4`, `#111`: `90,0 / 100` ✅):** Draw calls vazios caíram **`-64,7%` a `-84,0%`** (`4-3`: `501 → 80`, `2-1`: `412 → 80`, `4-5`: `290 → 93`); **`0,00% ≥ 245`** white-out em todos os 7 biomas; Mobile Portrait `59,9 FPS` (`16,7 ms`, `87/101` calls); `loadStageMs` caiu `3,5×` pós-4E (`1028,4 → 294,6 ms` mediano, `279,4 ms` mesmo bioma, `max 554,8 ms`); ciclo 20 fases `Δgeo=0 / Δtex=0 / Δprog=0 / lights=[5]`; `0` console errors/warnings; `tests/visual-biomes.test.mjs` **4/4** (`35/35` totais PASS). Registrados **6 P2s** (estresse 40T iGPU `1.123–1.397` calls / `10–30 FPS`, `loadStageMs` vs `≤ 120 ms`, costura dupla `4-1`, `S=256` não-deserto, contraste asfalto `4-3` / `ewPulseMesh`, topbar CSS mobile) para a **Fase 5**. Veja a **Seção 16**.
+- **Próximo passo após aprovação do GATE G4:** Fazer commit local da Fase 4 e iniciar a **Fase 5 (Polish Final, Otimização 40T/`loadStage`, Lote Opcional `A-10`/`B-52` + Projéteis + UI Qualidade/CSS Mobile → GATE G5)**.
 
 ---
 
@@ -367,48 +370,50 @@ Legenda de status: `⬜` Pendente | `🔄` Em andamento | `✅` Aprovado em revi
 | 22 | `javelin` | TOW / FGM-148 Javelin *(legada)* | `area` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ `90,5/100` *(F3 — `reviewer-f3b` #93)* |
 | 23 | `hesco` | Hesco Bastion *(legada)* | `support` | ✅ | `N/A` | `N/A` | `N/A` | `N/A` | ✅ | ✅ `90,5/100` *(1 nível `isBarrier`)* |
 
-### 10.2 Cobertura dos 7 Biomas × 20 Fases (`src/data/worlds.js`)
+### 10.2 Cobertura dos 7 Biomas × 20 Fases (`src/data/worlds.js`) — **7/7 Biomas & 20/20 Fases ✅ (Fase 4)**
+
+> **Validação Completa (`tests/visual-biomes.test.mjs`, `4/4 PASS` + Stage 4C/4E):** `TerrainSplatting3D` ativo nos **7 biomas** com raycast proxy `groundPlane.visible === false`; `BiomeProps3D` `InstancedMesh` em 100% de `CELL.ROCK`, curvas de pista e **5 superfícies especiais** (`restricted`, `ice`, `fog`, `toxic`, `lava`); **`0,00% ≥ 245`** white-out em todos os biomas; ciclo completo das 20 fases sem vazamento (`Δgeo=0 / Δtex=0 / Δprog=0 / lights=[5]`).
 
 | Fase | Título (`worlds.js`) | Bioma | Células Especiais | Baseline Capturado | Terreno + Splat | Props Instanced | Luz / IBL / Especiais | Revisão Final |
 |---|---|---|---|:---:|:---:|:---:|:---:|:---:|
-| `1-1` | Desfiladeiro de Basra | `desert` | — | ✅ (C1/C5/400%/Mob) | ✅ (`64 px/u` FBM) | ✅ (`InstancedMesh` + Spawn/FOB) | ✅ (`desert` IBL/AgX) | ✅ `90,1/100` (`reviewer-f2b` #68) |
-| `1-2` | Refinaria Al-Faw | `desert` | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `1-3` | Vale do Eufrates | `desert` | 3 Spawns | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `1-4` | Cidadela de Palmira | `desert` | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `1-5` | Fortaleza Final: Bastião SCUD | `desert` | Boss Stage | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `2-1` | Estação Polar Murmansk | `arctic` | — *(0 iceCells)* | ✅ (C1 white-out) | ⬜ | ⬜ | ⬜ | ⬜ |
-| `2-2` | Passo da Tundra Congelada | `arctic` | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `2-3` | Base Submarina Severodvinsk | `arctic` | 3 Spawns | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `2-4` | Geleira Novaya Zemlya | `arctic` | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `2-5` | Fortaleza Final: Bunker Kotin | `arctic` | Boss Stage | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `3-1` | Pátio Ferroviário Donbas | `industrial` | — | ✅ (C1) | ⬜ | ⬜ | ⬜ | ⬜ |
-| `3-2` | Siderúrgica Azovstal | `industrial` | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `3-3` | Aeródromo Militar Engels | `industrial` | 3 Spawns | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `3-4` | Complexo Nuclear Kursk | `industrial` | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `3-5` | Fortaleza Final: Cidadela Kirov | `industrial` | Boss Stage, 3 Spawns | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `4-1` | Vale das Fronteiras | `forest` | — | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `4-2` | Desfiladeiro de Ferro | `canyon` | `14 restricted` | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `4-3` | Porto Congelado | `arctic` | `22 ice`, `12 restricted` | ✅ (C1 white-out) | ⬜ | ⬜ | ⬜ | ⬜ |
-| `4-4` | Pântano das Ruínas | `swamp` | `26 fog`, `8 toxic`, 3 Spawns | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
-| `4-5` | Complexo Vulcânico | `volcanic` | `10 lava`, Boss, 3 Spawns | ✅ (C1) | ⬜ | ⬜ | ⬜ | ⬜ |
+| `1-1` | Desfiladeiro de Basra | `desert` | — | ✅ (C1/C5/400%/Mob) | ✅ (`64 px/u` FBM) | ✅ (`InstancedMesh` + Spawn/FOB) | ✅ (`desert` IBL/AgX) | ✅ `90,1/100` (`F2` #68) · `90,0` (`F4` #111) |
+| `1-2` | Refinaria Al-Faw | `desert` | — | ✅ (F4 headless) | ✅ (`64 px/u` FBM) | ✅ (`InstancedMesh`) | ✅ (`desert` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `1-3` | Vale do Eufrates | `desert` | 3 Spawns | ✅ (F4 headless) | ✅ (`64 px/u` FBM) | ✅ (`InstancedMesh`) | ✅ (`desert` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `1-4` | Cidadela de Palmira | `desert` | — | ✅ (F4 headless) | ✅ (`64 px/u` FBM) | ✅ (`InstancedMesh`) | ✅ (`desert` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `1-5` | Fortaleza Final: Bastião SCUD | `desert` | Boss Stage | ✅ (F4 headless) | ✅ (`64 px/u` FBM) | ✅ (`InstancedMesh`) | ✅ (`desert` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `2-1` | Estação Polar Murmansk | `arctic` | — *(0 iceCells)* | ✅ (C1 white-out → `0%`) | ✅ (`80` calls, FBM) | ✅ (`InstancedMesh` crags/pinheiros) | ✅ (`arctic` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `2-2` | Passo da Tundra Congelada | `arctic` | — | ✅ (F4 headless) | ✅ (FBM `arctic`) | ✅ (`InstancedMesh`) | ✅ (`arctic` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `2-3` | Base Submarina Severodvinsk | `arctic` | 3 Spawns | ✅ (F4 headless) | ✅ (FBM `arctic`) | ✅ (`InstancedMesh`) | ✅ (`arctic` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `2-4` | Geleira Novaya Zemlya | `arctic` | — | ✅ (F4 headless) | ✅ (FBM `arctic`) | ✅ (`InstancedMesh`) | ✅ (`arctic` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `2-5` | Fortaleza Final: Bunker Kotin | `arctic` | Boss Stage | ✅ (F4 headless) | ✅ (FBM `arctic`) | ✅ (`InstancedMesh`) | ✅ (`arctic` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `3-1` | Pátio Ferroviário Donbas | `industrial` | — | ✅ (C1 → F4 `78` calls) | ✅ (lajes c/ juntas) | ✅ (`InstancedMesh` silos/vigas) | ✅ (`industrial` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `3-2` | Siderúrgica Azovstal | `industrial` | — | ✅ (F4 headless) | ✅ (lajes c/ juntas) | ✅ (`InstancedMesh`) | ✅ (`industrial` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `3-3` | Aeródromo Militar Engels | `industrial` | 3 Spawns | ✅ (F4 headless) | ✅ (lajes c/ juntas) | ✅ (`InstancedMesh`) | ✅ (`industrial` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `3-4` | Complexo Nuclear Kursk | `industrial` | — | ✅ (F4 headless) | ✅ (lajes c/ juntas) | ✅ (`InstancedMesh`) | ✅ (`industrial` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `3-5` | Fortaleza Final: Cidadela Kirov | `industrial` | Boss Stage, 3 Spawns | ✅ (F4 headless) | ✅ (lajes c/ juntas) | ✅ (`InstancedMesh`) | ✅ (`industrial` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `4-1` | Vale das Fronteiras | `forest` | — | ✅ (F4 `85` calls) | ✅ (gramado/lama) | ✅ (`InstancedMesh` + vento GPU) | ✅ (`forest` IBL/AgX) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `4-2` | Desfiladeiro de Ferro | `canyon` | `14 restricted` | ✅ (F4 `76` calls) | ✅ (terracota FBM) | ✅ (`InstancedMesh` mesas/hoodoos) | ✅ (`canyon` + `14 restricted`) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `4-3` | Porto Congelado | `arctic` | `22 ice`, `12 restricted` | ✅ (C1 → F4 `80` calls) | ✅ (FBM + raycast) | ✅ (`InstancedMesh`) | ✅ (`22 ice` + `12 restricted`) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `4-4` | Pântano das Ruínas | `swamp` | `26 fog`, `8 toxic`, 3 Spawns | ✅ (F4 `99` calls) | ✅ (poças úmidas) | ✅ (`InstancedMesh` + vento GPU) | ✅ (`26 fog` suave + `8 toxic`) | ✅ `90,0/100` (`reviewer-f4` #111) |
+| `4-5` | Complexo Vulcânico | `volcanic` | `10 lava`, Boss, 3 Spawns | ✅ (C1 → F4 `93` calls) | ✅ (basalto + asfalto) | ✅ (`InstancedMesh` espiras) | ✅ (`10 lava` shader crosta) | ✅ `90,0/100` (`reviewer-f4` #111) |
 
 ### 10.3 Scorecard de Referência (Seção 8.3 — 100 Pontos, Gates G1 a G6)
 
-> **Critério de Aprovação AAA:** **≥ 90 / 100 pontos** e **nenhum critério individual abaixo de 80% do seu peso** (além de `0` defeitos P0 e 100% da matriz `✅`). Notas atribuídas pelos **revisores independentes (`reviewer-f1` #38, `reviewer-f2` #62, `reviewer-f2b` #68, `reviewer-f3` #89 e `reviewer-f3b` #93)** com contexto limpo.
+> **Critério de Aprovação AAA:** **≥ 90 / 100 pontos** e **nenhum critério individual abaixo de 80% do seu peso** (além de `0` defeitos P0 e 100% da matriz `✅`). Notas atribuídas pelos **revisores independentes (`reviewer-f1` #38, `reviewer-f2b` #68, `reviewer-f3b` #93 e `reviewer-f4` #111)** com contexto limpo.
 
-| Critério (Seção 8.3) | Peso | Piso Mínimo (80%) | O que é Avaliado | Baseline (Pré-F1) | G1 (F1) | G2 (F2) | Pré-Polish F3 (`#89`) | **G3 (F3, `reviewer-f3b` #93)** | Δ (F2→F3) |
+| Critério (Seção 8.3) | Peso | Piso Mínimo (80%) | O que é Avaliado | Baseline (Pré-F1) | G1 (F1) | G2 (F2) | G3 (F3) | **G4 (F4, `reviewer-f4` #111)** | Δ (F3→F4) |
 |---|---:|---:|---|---:|---:|---:|---:|---:|---:|
-| **1. Silhueta e leitura em 1 s** | 15 pts | 12,0 pts | Distinção imediata de cada categoria/torre a `90–210u`, proporção clara e separação figura-fundo. | 7,5 / 15 | 9,5 / 15 | 13,8 / 15 | 13,2 / 15 | **14,1 / 15** ✅ | +0,3 |
-| **2. Forma (bisel, proporção, hierarquia 3 níveis)** | 10 pts | 8,0 pts | Chanfros/bevels captando especular, subconjuntos mecânicos coerentes e leitura Macro/Meso/Micro (`210u / 90u / 24u`). | 4,0 / 10 | 4,5 / 10 | 8,9 / 10 | 7,8 / 10 | **9,0 / 10** ✅ | +0,1 |
-| **3. Materiais PBR corretos e coerentes** | 10 pts | 8,0 pts | Dielétricos `metalness ≤ 0.05`, `normalMap` Sobel + ORM, desgaste/sujeira e densidade de texel ≤ `2×` (`64–128 px/u`). | 4,0 / 10 | 5,5 / 10 | 9,0 / 10 | 8,6 / 10 | **9,0 / 10** ✅ | 0,0 |
-| **4. Progressão de tier/especialização** | 10 pts | 8,0 pts | Evolução clara `nv1 → nv2-3 → nv4+ → 5A / 6B` + ghost limpo (`EdgesGeometry`) e `ownerRingMesh` sem clipping. | 4,5 / 10 | 4,5 / 10 | 9,2 / 10 | 7,9 / 10 | **9,2 / 10** ✅ | 0,0 |
-| **5. Luz, sombra e oclusão** | 10 pts | 8,0 pts | IBL externo por bioma, `AgX`, sombras `PCFShadowMap` sem acne/clipping, AO de contato ancorando bases e bloom 100% seletivo. | 3,5 / 10 | 8,0 / 10 ✅ | 9,0 / 10 | 8,8 / 10 | **9,0 / 10** ✅ | 0,0 |
-| **6. Terreno e composição do mapa** | 10 pts | 8,0 pts | Splatting + detail `64 px/u` (zero "bolotas"), micro-relevo natural, estradas/bermas nítidas, props enraizados e Spawn/FOB herói. | 3,5 / 10 | 4,0 / 10 | 9,0 / 10 | 9,0 / 10 | **9,0 / 10** ✅ | 0,0 |
-| **7. Identidade de bioma e atmosfera** | 10 pts | 8,0 pts | 7 biomas distintos preservando cores de `worlds.js`, zero white-out ártico, skydome/neblina coerentes e superfícies especiais convincentes. | 3,0 / 10 | 7,8 / 10 | 8,8 / 10 | 8,8 / 10 | **8,8 / 10** ✅ | 0,0 |
-| **8. Legibilidade tática** | 10 pts | 8,0 pts | Contraste inimigos vs terreno ≥ `3:1` em grayscale, células especiais inequívocas, acessibilidade daltônico-safe, emissivo ≤ 5%, zero strobe > 3 Hz. | 4,0 / 10 | 8,2 / 10 ✅ | 9,1 / 10 | 8,4 / 10 | **9,2 / 10** ✅ | +0,1 |
-| **9. Imagem limpa (AA, cintilação, z-fighting)** | 5 pts | 4,0 pts | MSAA/SMAA limpo no zoom 400%, zero z-fighting, zero shimmer de mipmap/aliasing em diagonais e linhas de rota. | 1,5 / 5 | 4,5 / 5 ✅ | 4,6 / 5 | 4,5 / 5 | **4,6 / 5** ✅ | 0,0 |
-| **10. Performance e estabilidade** | 10 pts | 8,0 pts | Metas da Seção 7 batidas (40T estresse `4-5`/`1-1`, `1920×1080` & `1080×1920`), 0 vazamentos nas 20 fases, 0 console errors, 31/31 testes verdes, `dist/` sem código dev. | 4,5 / 10 | 8,8 / 10 ✅ | 8,7 / 10 | 8,6 / 10 | **8,6 / 10** ✅ | -0,1 |
-| **TOTAL** | **100 pts** | **≥ 90,0 pts** | **AAA aprovado = ≥ 90/100 + nenhum critério < 80% + 0 P0** | **40,0 / 100** | **65,3 / 100** | **90,1 / 100** ✅ | **85,6 / 100** | **90,5 / 100** ✅ | **+0,4** |
+| **1. Silhueta e leitura em 1 s** | 15 pts | 12,0 pts | Distinção imediata de cada categoria/torre a `90–210u`, proporção clara e separação figura-fundo. | 7,5 / 15 | 9,5 / 15 | 13,8 / 15 | 14,1 / 15 | **14,0 / 15** ✅ | -0,1 |
+| **2. Forma (bisel, proporção, hierarquia 3 níveis)** | 10 pts | 8,0 pts | Chanfros/bevels captando especular, subconjuntos mecânicos coerentes e leitura Macro/Meso/Micro (`210u / 90u / 24u`). | 4,0 / 10 | 4,5 / 10 | 8,9 / 10 | 9,0 / 10 | **8,9 / 10** ✅ | -0,1 |
+| **3. Materiais PBR corretos e coerentes** | 10 pts | 8,0 pts | Dielétricos `metalness ≤ 0.05`, `normalMap` Sobel + ORM, desgaste/sujeira e densidade de texel ≤ `2×` (`64–128 px/u`). | 4,0 / 10 | 5,5 / 10 | 9,0 / 10 | 9,0 / 10 | **8,8 / 10** ✅ | -0,2 |
+| **4. Progressão de tier/especialização** | 10 pts | 8,0 pts | Evolução clara `nv1 → nv2-3 → nv4+ → 5A / 6B` + ghost limpo (`EdgesGeometry`) e `ownerRingMesh` sem clipping. | 4,5 / 10 | 4,5 / 10 | 9,2 / 10 | 9,2 / 10 | **9,1 / 10** ✅ | -0,1 |
+| **5. Luz, sombra e oclusão** | 10 pts | 8,0 pts | IBL externo por bioma, `AgX`, sombras `PCFShadowMap` sem acne/clipping, AO de contato ancorando bases e bloom 100% seletivo. | 3,5 / 10 | 8,0 / 10 ✅ | 9,0 / 10 | 9,0 / 10 | **9,1 / 10** ✅ | +0,1 |
+| **6. Terreno e composição do mapa** | 10 pts | 8,0 pts | Splatting + detail `64 px/u` (zero "bolotas"), micro-relevo natural, estradas/bermas nítidas, props enraizados e Spawn/FOB herói. | 3,5 / 10 | 4,0 / 10 | 9,0 / 10 | 9,0 / 10 | **9,1 / 10** ✅ | +0,1 |
+| **7. Identidade de bioma e atmosfera** | 10 pts | 8,0 pts | 7 biomas distintos preservando cores de `worlds.js`, zero white-out ártico, skydome/neblina coerentes e superfícies especiais convincentes. | 3,0 / 10 | 7,8 / 10 | 8,8 / 10 | 8,8 / 10 | **9,3 / 10** ✅ | +0,5 |
+| **8. Legibilidade tática** | 10 pts | 8,0 pts | Contraste inimigos vs terreno ≥ `3:1` em grayscale, células especiais inequívocas, acessibilidade daltônico-safe, emissivo ≤ 5%, zero strobe > 3 Hz. | 4,0 / 10 | 8,2 / 10 ✅ | 9,1 / 10 | 9,2 / 10 | **9,0 / 10** ✅ | -0,2 |
+| **9. Imagem limpa (AA, cintilação, z-fighting)** | 5 pts | 4,0 pts | MSAA/SMAA limpo no zoom 400%, zero z-fighting, zero shimmer de mipmap/aliasing em diagonais e linhas de rota. | 1,5 / 5 | 4,5 / 5 ✅ | 4,6 / 5 | 4,6 / 5 | **4,6 / 5** ✅ | 0,0 |
+| **10. Performance e estabilidade** | 10 pts | 8,0 pts | Metas da Seção 7 batidas (40T estresse `4-5`/`1-1`, `1920×1080` & `1080×1920`), 0 vazamentos nas 20 fases, 0 console errors, testes verdes, `dist/` sem código dev. | 4,5 / 10 | 8,8 / 10 ✅ | 8,7 / 10 | 8,6 / 10 | **8,1 / 10** ✅ | -0,5 |
+| **TOTAL** | **100 pts** | **≥ 90,0 pts** | **AAA aprovado = ≥ 90/100 + nenhum critério < 80% + 0 P0** | **40,0 / 100** | **65,3 / 100** | **90,1 / 100** ✅ | **90,5 / 100** ✅ | **90,0 / 100** ✅ | **-0,5** |
 
 ---
 
@@ -432,8 +437,9 @@ Todas as 8 recomendações abaixo foram **aprovadas pelo usuário no GATE G0** (
 - **2026-11-21 — Fase 0 (Auditoria, Baseline & Plano Mestre):** Concluída e aprovada no **GATE G0** (commit `eaff7f2`). `npm test` `15/15 PASS`; `npm run build` `PASS`; 8 screenshots baseline capturados; APIs Three.js `0.187.0` verificadas.
 - **2026-11-21 — Fase 1 (Fundação Global: Dev Tools, Quality Presets, AA, Tone Mapping, IBL por Bioma, Bloom HDR & Kits Geométricos/PBR):** Concluída, auditada por revisor independente (`reviewer-f1`: **`40,0 → 65,3 / 100`, `+25,3 pts`**) e aprovada no **GATE G1** (commit `9d6eaf1`). `npm test` `21/21 PASS`; `npm run build` `PASS` (`0` matches de dev tools em `dist/`); `0 errors / 0 warnings` no console; `0` vazamentos após 20 fases em sequência (`Δgeo=0, Δtex=0, Δprog=0`); `Δprograms = 0` ao construir 12 torres diversas; Mobile Portrait `19,9 → 59,5 FPS`; White-out ártico `55,3% → 0,00%`.
 - **2026-11-22 — Fase 2 (Vertical Slice: 5 Torres Hero `howitzer, patriot, tesla_tower, phalanx, ew_crew` + Mapa `1-1` Deserto):** Concluída através das Etapas 2A–2F, auditada por **`reviewer-f2b` (#68)** com **`90,1 / 100` ✅** e aprovada no **GATE G2** (commit `79f1f1a`). `npm test` `26/26 PASS`; `npm run build` `PASS`; ciclo 20 fases `Δgeo=0/Δtex=0/Δprog=0`; `Δprograms=0`.
-- **2026-11-23 — Fase 3 (Produção em Escala: Restantes 18 Torres nos 6 Estados):** Concluída através das Etapas 3A–3E. Extraído `TowerRigPrimitives.ts` + 4 módulos `src/three/towers/*.ts` integrados em `MilitaryModels3D.ts` (removidos builders legados e `specRing`/`crownRing`), validados por `tests/visual-towers23.test.mjs` (**`31/31 PASS`**) e `npm run build` (**`PASS`**, `0` leaks em `dist/`). Medições WebGL2 (`#87`/`#91`): Gallery `nv1` 23/23 caiu **`971 → 479` sceneCalls (`-50,7%` vs F1, `74.214` tris)**; `5A: 549 calls`, `6B: 551 calls`, `64px silhouette: 194 calls`; `1-1` Ultra pós-polish (`7` torres `5A`) em `279 sceneCalls / 559 fullCalls`, `101.900` tris, `programs = 51`; `low 59,9 FPS`, `medium 58,8 FPS p50`; `Δprograms = 0` em colocação/upgrades; ciclo 20 fases `Δgeo=0/Δtex=0/Δprog=0`; `0` console errors/warnings. Na auditoria cega (`reviewer-f3`, `#89`), obteve **`85,6 / 100`** com 3 P1s (`ewRings` colidindo em runtime, `abrams_pit` cheeks em 24u, `ballista 5A`); após Stage 3E (correção dos 3 P1s + 4 P2s), **`reviewer-f3b` (#93)** aprovou com **`90,5 / 100` ✅ (`0 P0`, `0 P1`, `10/10 ≥ 86%`)**. Publicada na **Seção 15** para **GATE G3**.
-- *(Próximo registro: Fase 4 — 6 Biomas Restantes / 19 Fases, Células Especiais 3D & Cache `loadStage` → GATE G4).*
+- **2026-11-23 — Fase 3 (Produção em Escala: Restantes 18 Torres nos 6 Estados):** Concluída através das Etapas 3A–3E, auditada por **`reviewer-f3b` (#93)** com **`90,5 / 100` ✅** (`0 P0`, `0 P1`, `10/10 ≥ 86%`) e aprovada no **GATE G3** (commit `09c2d4c`). `npm test` `31/31 PASS`; `npm run build` `PASS` (`0` dev leaks em `dist/`).
+- **2026-11-24 — Fase 4 (7 Biomas, 20 Fases, Props `InstancedMesh` & 5 Superfícies Especiais):** Concluída através das Etapas 4A–4E (`TerrainSplatting3D.ts`, `BiomeProps3D.ts`, `TerrainDiorama3D.ts`, `ProceduralPBRTextures.ts`, `Battlefield3D.ts`, `tests/visual-biomes.test.mjs`). Draw calls vazios caíram **`-64,7%` a `-84,0%`** (`4-3`: `501→80`, `2-1`: `412→80`, `4-5`: `290→93`, `3-1`: `221→78`, `1-1`: `295→78`); **`0,00% ≥ 245`** white-out em todos os biomas; Mobile Portrait `59,9 FPS` (`16,7 ms`, `87/101` calls); `loadStageMs` caiu `3,5×` pós-4E (`1028,4 → 294,6 ms` mediano, `279,4 ms` mesmo bioma, `max 554,8 ms`); ciclo 20 fases `Δgeo=0 / Δtex=0 / Δprog=0 / lights=[5]`; `0 errors / 0 warnings`; `35/35` testes verificados; **`reviewer-f4` (#111)** aprovou para **GATE G4** com **`90,0 / 100` ✅ (`0 P0`, `0 P1`, `10/10 ≥ 81%`)**, registrando 6 P2s para a Fase 5. Publicada na **Seção 16**.
+- *(Próximo registro: Fase 5 — Polish Final, Otimização 40T/`loadStage`, Lote Opcional `A-10`/`B-52` + Projéteis + UI Qualidade/CSS Mobile → GATE G5).*
 
 ---
 
@@ -760,3 +766,49 @@ Na Etapa 2D (`#62`), o revisor independente `reviewer-f2` atribuiu **`78,3 / 100
    - Glint pontual em `brass` (`roughness 0.26`) no pistão de `eng_workshop`;
    - `ewPulseMesh` no chão ao expandir até o alcance máximo sobrepõe borda da estrada/torres adjacentes;
    - Estresse de 40 torres em `4-5` e cache de `loadStage ≤ 120 ms` planejados para a Fase 4.
+
+---
+
+## 16. Diário de Bordo — Fase 4: 7 Biomas, 20 Fases & Superfícies Especiais (GATE G4)
+
+### 16.1 Módulos Criados e Atualizados na Fase 4
+
+| Arquivo | Tipo | Responsabilidade & Entregas Verificadas |
+|---|---|---|
+| [src/three/TerrainSplatting3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/TerrainSplatting3D.ts) | Editado | Preservação integral de `desert`; extensão de `computeTerrainMicroReliefY` para todos os 7 biomas (`y === 0` estrito em células navegáveis/construíveis); splatmaps orgânicos (zero `ctx.arc()`), `createBiomeRoadMarksTexture` `2048×1170` com alto contraste por bioma (incl. asfalto `[78,72,74]` pós-4E em `volcanic`), `getCachedBiomeDetailTextures` / `disposeActiveBiomeDetailCache()` e shader único `'defcon_biome_splat_v1'` (`createBiomeTerrainWarmMesh`). |
+| [src/three/BiomeProps3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/BiomeProps3D.ts) | Novo | 100% dos props de `CELL.ROCK` e curvas de pista nos 6 biomas não-deserto convertidos para `THREE.InstancedMesh` (`frustumCulled = false`, `0` meshes soltos, `0` alocações em `update()`): crags graníticos/pinheiros nevados (`arctic`), usinas/silos/vigas I/Jersey contidos na célula (`industrial`), copas em camadas com vento GPU `'defcon_foliage_wind_v1'` (`forest`/`swamp`/`arctic`), mesas terracota (`canyon`), espiras hexagonais (`volcanic`), e as **5 superfícies especiais** (`restrictedCells` faixas diagonais laranja/gunmetal, `iceCells` placas `#78b4e4` `roughness 0.16` + `normalMap` Sobel rachado, `fogCells` 2 camadas suaves `createSoftFogTexture`, `toxicCells` `'defcon_toxic_pool_v1'`, `lavaCells` crosta basáltica + `'defcon_lava_flow_v1'`). |
+| [src/three/TerrainDiorama3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/TerrainDiorama3D.ts) | Editado | Orquestração dos 7 biomas com `TerrainSplatting3D` + `BiomeProps3D`, preservação do proxy invisível `groundPlane.visible = false` para raycast e `dispose()` simétrico. |
+| [src/three/ProceduralPBRTextures.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/ProceduralPBRTextures.ts) | Editado (4E) | Cache por parâmetro `repeat` evitando clonagem/recriação redundante de texturas durante trocas de fase. |
+| [src/three/Battlefield3D.ts](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/src/three/Battlefield3D.ts) | Editado | Prewarm dos meshes/shaders de terreno e props (`createBiomeTerrainWarmMesh` + `createBiomePropsWarmMeshes`) e cache de `biomeEnv` em `Battlefield3D.ts` para estabilizar `programs` e acelerar trocas de fase no mesmo bioma. |
+| [tests/visual-biomes.test.mjs](file:///c:/Users/Usu/Documents/Workspace%202026/War%20Tower%20Defense/tests/visual-biomes.test.mjs) | Novo | 4 suítes validando as 20 fases × 7 biomas (`y === 0` em células planas, `0` meshes soltos em `BiomeProps3D`, patches de shader r187, descarte simétrico `Δgeo=0/Δtex=0/Δinst=0`). |
+
+### 16.2 Medições Reais WebGL2, Benchmarks & Saúde (`#107` e `#109`)
+
+- **Queda de Draw Calls (Mapas Vazios, `1440×900`, `ultra`):**
+  - `4-3` Arctic+Ice: **`501` (F0) → `80` sceneCalls / `174` fullCalls (`-84,0%`)** | `meanLuma = 92,3` (`0,00% ≥ 245`)
+  - `2-1` Arctic: **`412` (F0) → `80` / `174` (`-80,6%`)** | `meanLuma = 93,4` (`0,00% ≥ 245`)
+  - `1-1` Desert: **`295` (F0) → `78` / `170` (`-73,6%`)** | `meanLuma = 96,8` (`0,00% ≥ 245`)
+  - `4-5` Volcanic (`10 lava`): **`290` (F0) → `93` / `199` (`-67,9%`)** | `meanLuma = 50,0` (`0,00% ≥ 245`)
+  - `3-1` Industrial: **`221` (F0) → `78` / `170` (`-64,7%`)** | `meanLuma = 66,0` (`0,00% ≥ 245`)
+  - `4-1` Forest: `85 / 184` (`meanLuma = 88,4`, `0,00% ≥ 245`) | `4-2` Canyon (`14 restricted`): `76 / 166` (`66,3`, `0,00%`) | `4-4` Swamp (`26 fog, 8 toxic`): `99 / 209` (`72,5`, `0,00%`).
+- **Raycast `4-3` (`groundPlane.visible === false`), Grayscale & Mobile Portrait (`390×844`):**
+  - Raycast `4-3`: `FREE (1,1)` → ghost **Ciano (`0x38bdf8`)** constrói `abrams_pit`; `ROCK (19,3)` e `RESTRICTED (13,1)` → ghost **Laranja (`0xf97316`)** bloqueiam clique.
+  - Contraste Grayscale com inimigos vivos (`4-3` 8 hostis, `4-5` pós-4E 8 hostis): unidades, estradas, gelo, faixas restritas e fissuras de lava legíveis sem cor.
+  - Mobile Portrait (`390×844`, `dpr=1.5`, auto `medium`): **`87` sceneCalls / `101` fullCalls**, `70.098` tris, **`16,7 ms` p50 (`59,9 FPS`)**, tabuleiro 100% visível dos Spawns à FOB.
+- **Estresse 40 Torres Mistas `5A/6B` (`1920×1080`, `4-5` combate e `1-1`, `#107`):**
+  - Visual limpo sem clipping ou estouro de bloom, porém `1.123–1.397` sceneCalls (`low 29,5–29,9 FPS`, `medium 15,0–19,8 FPS`, `high 14,8–14,9 FPS`, `ultra 10,0–11,9 FPS` na iGPU Intel UHD 630) — registrado como pendência arquitetural para a Fase 5.
+- **Ciclo das 20 Fases (`1-1`..`4-5` → `1-1`, 21 cargas pós-4E `#109`) & Console:**
+  - Vazamento: início `geos=101, texs=51, progs=48, lights=5` → fim **`geos=101, texs=51, progs=48, lights=5` (`Δgeo = 0, Δtex = 0, Δprog = 0, lights = [5]`)**.
+  - `loadStageMs` (pós-4E, queda de **`3,5×`** na mediana): **`1.028,4 ms` → `294,6 ms` mediano** (`279,4 ms` mesmo bioma, `424,0 ms` troca de bioma, `min 254,4 ms`, `max 554,8 ms ≤ 555 ms`).
+  - Console: **`0 errors / 0 warnings / 0 pageErrors`**; Build `86` módulos (`0` dev leaks em `dist/`); Testes: **`35/35`** verificados (`visual-*` `20/20` incl. `visual-biomes` `4/4`, `balance+expansion` `7/7`, `multiplayer` `8/8`).
+
+### 16.3 Auditoria Independente (`reviewer-f4`, `#111`: `90,0 / 100` ✅) & P2s para a Fase 5
+
+- **Veredito GATE G4:** **`APROVADO PARA GATE G4 — 90,0 / 100 ✅`** (`0 P0`, `0 P1` bloqueantes, `10/10` critérios ≥ `81%`): `#1 14,0/15`, `#2 8,9/10`, `#3 8,8/10`, `#4 9,1/10`, `#5 9,1/10`, `#6 9,1/10`, `#7 9,3/10`, `#8 9,0/10`, `#9 4,6/5`, `#10 8,1/10`.
+- **6 P2s / Pendências Registradas pelo `reviewer-f4` (`#111`) para a Fase 5:**
+  1. **Otimização `40T` iGPU Draw Calls:** reduzir `1.123–1.397` sceneCalls em 40 torres `5A/6B` (otimizar sombras/instancing de torres ou recalibrar §7.1 para iGPU vs cap real de 30 torres).
+  2. **`loadStageMs` vs Meta Estendida (`≤ 120 ms`):** reduzir de `294,6 ms` mediano (`max 554,8 ms`) cacheando/otimizando `createBiomeSplatData`, `renderRoadMarksTexture` e geometrias `BiomeProps3D.ts`.
+  3. **Pista Dupla Paralela em `4-1` (`f4_biome_forest_4-1.png`):** corrigir os 5 pequenos anéis/óvalos de meio-fio na costura central das duas pistas adjacentes (`rows 7–8, cols 1–5`).
+  4. **Densidade de Texel Não-Deserto (`TerrainSplatting3D.ts:1749`):** `S = 256` em `createBiomeDetailPair` reduz densidade para `32 px/u` (vs `64 px/u` em `desert` e comentário em `L1940`).
+  5. **Contraste Inimigo/Asfalto `4-3` Grayscale & `ewPulseMesh`:** aumentar margem de luminância entre infantaria escura e asfalto `[40,51,64]` em `4-3`, e conter `ewPulseMesh` na borda das pistas/torres vizinhas.
+  6. **HUD Mobile 2D (`f4_mobile_portrait_1-1.png`):** corrigir truncamento CSS da topbar HTML em `390×844` (`MAPA DE MUN...`, `TO...`) na Fase 5 (§8.2 `[ASSUMPTION-1]`, §11 #3).
