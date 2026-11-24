@@ -2,9 +2,9 @@
 
 > **Projeto:** DEFCON: Frontline (`defcon-frontline`) — Tower Defense Militar 3D em Three.js r187 + Vite 7  
 > **Documento:** `docs/designs/VISUAL_OVERHAUL.md` (Logbook Persistente — Fonte de Verdade das Fases 0 a 6)  
-> **Data da Auditoria Fase 0:** 2026-11-21 | **Commits Aprovados:** F0 `eaff7f2` (`GATE G0`) · F1 `9d6eaf1` (`GATE G1`) · F2 `79f1f1a` (`GATE G2`) · F3 `09c2d4c` (`GATE G3`)  
-> **Estado Atual:** 🟡 **FASE 4 CONCLUÍDA — 7 BIOMAS & 20 FASES APROVADAS (`90,0 / 100`) — AGUARDANDO GATE G4**  
-> **Scorecard Independente (`reviewer-f4`, `#111`):** **F0 `40,0` → F1 `65,3` → F2 `90,1` → F3 `90,5` → F4 `90,0 / 100` ✅ (`0 P0`, `0 P1`, 10/10 critérios ≥ 81% do peso)**.
+> **Data da Auditoria Fase 0:** 2026-11-21 | **Commits Aprovados:** F0 `eaff7f2` (`G0`) · F1 `9d6eaf1` (`G1`) · F2 `79f1f1a` (`G2`) · F3 `09c2d4c` (`G3`) · F4 `26d1d1d` (`G4`) · F5 `fa3ad67` (`G5`)  
+> **Estado Atual:** 🟢 **OVERHAUL AAA 3D CONCLUÍDO (FASES 0 A 6) — VERIFICADO EM BUILD DE PRODUÇÃO (`vite preview`) — GATE G6 / HANDOFF FINAL**  
+> **Scorecard Evolutivo:** **F0 `40,0` → F1 `65,3` → F2 `90,1` → F3 `90,5` → F4 `90,0` → F5/F6 `92,4 / 100` ✅ (`0 P0`, `0 P1`, 10/10 critérios ≥ 85% do peso)**.
 
 ---
 
@@ -439,8 +439,8 @@ Todas as 8 recomendações abaixo foram **aprovadas pelo usuário no GATE G0** (
 - **2026-11-22 — Fase 2 (Vertical Slice: 5 Torres Hero `howitzer, patriot, tesla_tower, phalanx, ew_crew` + Mapa `1-1` Deserto):** Concluída através das Etapas 2A–2F, auditada por **`reviewer-f2b` (#68)** com **`90,1 / 100` ✅** e aprovada no **GATE G2** (commit `79f1f1a`). `npm test` `26/26 PASS`; `npm run build` `PASS`; ciclo 20 fases `Δgeo=0/Δtex=0/Δprog=0`; `Δprograms=0`.
 - **2026-11-23 — Fase 3 (Produção em Escala: Restantes 18 Torres nos 6 Estados):** Concluída através das Etapas 3A–3E, auditada por **`reviewer-f3b` (#93)** com **`90,5 / 100` ✅** (`0 P0`, `0 P1`, `10/10 ≥ 86%`) e aprovada no **GATE G3** (commit `09c2d4c`). `npm test` `31/31 PASS`; `npm run build` `PASS` (`0` dev leaks em `dist/`).
 - **2026-11-24 — Fase 4 (7 Biomas, 20 Fases, Props `InstancedMesh` & 5 Superfícies Especiais):** Concluída através das Etapas 4A–4E (`TerrainSplatting3D.ts`, `BiomeProps3D.ts`, `TerrainDiorama3D.ts`, `ProceduralPBRTextures.ts`, `Battlefield3D.ts`, `tests/visual-biomes.test.mjs`). Draw calls vazios caíram **`-64,7%` a `-84,0%`** (`4-3`: `501→80`, `2-1`: `412→80`, `4-5`: `290→93`, `3-1`: `221→78`, `1-1`: `295→78`); **`0,00% ≥ 245`** white-out em todos os biomas; Mobile Portrait `59,9 FPS` (`16,7 ms`, `87/101` calls); `loadStageMs` caiu `3,5×` pós-4E (`1028,4 → 294,6 ms` mediano, `279,4 ms` mesmo bioma, `max 554,8 ms`); ciclo 20 fases `Δgeo=0 / Δtex=0 / Δprog=0 / lights=[5]`; `0 errors / 0 warnings`; `35/35` testes verificados; **`reviewer-f4` (#111)** aprovou para **GATE G4** com **`90,0 / 100` ✅ (`0 P0`, `0 P1`, `10/10 ≥ 81%`)**, registrando 6 P2s para a Fase 5. Publicada na **Seção 16**.
-- **2026-11-24 — Fase 5 (Performance, Aeronaves & Mísseis AAA, UI Qualidade 3D & Mobile Topbar → GATE G5):** Concluída (`Stage 5A` via swarm + `Stage 5B–5F` após encerramento do swarm em agente único). `noCastShadow` em `50` trims/ópticas não-silhueta reduziu estresse `40T` (`1.123–1.397 → 959–1.124` calls, `high 14,8 → 22,0 FPS` e `ultra 10,0 → 14,9 FPS` na iGPU); `createA10Warthog3D`, `createB52Bomber3D`, `createMissileMesh3D` e projéteis (`bulletGeo`/`shellGeo` Lathe aerodinâmicos) remodelados; costura da pista dupla paralela em `4-1` corrigida (`0` óvalos internos) e asfalto ártico `4-3` calibrado (`[68, 84, 102]`); `ewPulseMesh` suavizado (`RingGeometry(0.965, 1.0)` aditivo); topbar Mobile Portrait `390×844` ajustada (`docOverflowX=0`, zero truncamentos); seletor de Qualidade Gráfica 3D adicionado em `#tab-save` e `#help-modal` via `cmd:setQuality`/`quality:changed` (sem acoplamento ao `SaveManager`). Verificada com **`39/39` testes (`8` suítes incluído `tests/visual-polish.test.mjs`)**, `vite build` clean (`0` erros, `0` leaks em `dist/`), ciclo 20 fases `Δgeo=0 / Δtex=0 / Δprog=0 / lights=[5]`, **`0` console errors/warnings** e scorecard **`92,4 / 100 ✅` (`Stage 5D`)**. Publicada na **Seção 17**.
-- *(Próximo passo após aprovação do GATE G5: **Fase 6** — Commit local de G5, revisão final completa de 23 torres × 20 mapas × Desktop/Mobile & Handoff Final).*
+- **2026-11-24 — Fase 5 (Performance, Aeronaves & Mísseis AAA, UI Qualidade 3D & Mobile Topbar → GATE G5):** Concluída e aprovada no **GATE G5** (commit `fa3ad67`). Ver **Seção 17**.
+- **2026-11-24 — Fase 6 (Verificação Final em Build de Produção & Handoff → GATE G6):** Varredura completa no bundle final (`vite preview` porta `4173` + Gallery `?gallery=1` em dev): confirmada ausência total de ferramentas dev em `dist/` (`hasGalleryHook=false`, `hasPerfHook=false`, `LEAK_COUNT=0`), white-out zerado nos 7 biomas (`meanLuma 44,58–68,97`), raycast & colocação válidos com `groundPlane.visible=false`, ciclo das 20 fases sem vazamento (`Δgeo=0 / Δtex=0 / Δprog=0 / lights=[5]`), Mobile Portrait `390×844` (`docOverflowX=0`, auto `medium`, `MSAA 2x`), `0` console errors/warnings/pageErrors e **`39/39` testes verdes (`8` suítes)**. Veja a **Seção 18**.
 
 ---
 
@@ -838,4 +838,23 @@ Na Etapa 2D (`#62`), o revisor independente `reviewer-f2` atribuiu **`78,3 / 100
   - `4-5` `40T`: `low` **`28,7 FPS`** (`1.005` calls, `34,8 ms`), `high` **`18,7 FPS p50`** (`1.124` calls), `medium` **`16,1 FPS p50`** (`1.131` calls), `ultra` **`14,9 FPS p50`** (`980` calls, vs `10,0 FPS` na Fase 4). *(Nota: cap oficial de 1P no jogo é `30` torres).*
 - **Ciclo das 20 Fases (`1-1`..`4-5` → `1-1` em `high`) & Saúde do Console:** **`Δgeo = 0`, `Δtex = 0`, `Δprog = 0`, `lights = [5]`**, `msMed = 319,3 ms`, **`0` console errors / `0` console warnings / `0` pageErrors**.
 - **Auditoria Visual Stage 5D (`92,4 / 100` ✅):** `0 P0`, `0 P1`, **`10/10` critérios `≥ 85%`** (`#1 14,4/15`, `#2 9,3/10`, `#3 9,0/10`, `#4 9,2/10`, `#5 9,2/10`, `#6 9,4/10`, `#7 9,3/10`, `#8 9,4/10`, `#9 4,7/5`, `#10 8,5/10`).
+
+---
+
+## 18. Handoff Final — Fase 6 & Checklist Completo (`GATE G6`)
+
+### 18.1 Evidência de Verificação End-to-End no Build de Produção (`dist/` via `vite preview`)
+
+| Verificação | Resultado Medido |
+|---|---|
+| **Segurança do Bundle (`?gallery=1` em `vite preview`)** | **`hasGalleryHook = false`**, **`hasPerfHook = false`**, **`LEAK_COUNT = 0`** em `dist/assets/*.js` |
+| **Gallery Dev (`?gallery=1&mode=sheet&spec=5A`)** | **`23/23` torres `5A`** nítidas com chanfros/sombras de contato ([f6_gallery_23towers_5A.png](file:///C:/Users/Usu/.gemini/antigravity/brain/0524a177-dfd5-45e2-a2ed-8409e10f4018/f6_gallery_23towers_5A.png)) |
+| **Varredura dos 7 Biomas (`1-1, 2-1, 3-1, 4-1..4-5`)** | `meanLuma = 44,58–68,97`, `nearWhitePct ≤ 0,49%`, zero white-out ártico ([f6_biome_arctic_2-1_final.png](file:///C:/Users/Usu/.gemini/antigravity/brain/0524a177-dfd5-45e2-a2ed-8409e10f4018/f6_biome_arctic_2-1_final.png)) |
+| **Gameplay `4-5` + A-10 Strafe + Raycast** | `groundPlaneHidden = true`, `m2Placed = true`, sombra de voo A-10 sobre o mapa vulcânico ([f6_desktop_gameplay_showcase.png](file:///C:/Users/Usu/.gemini/antigravity/brain/0524a177-dfd5-45e2-a2ed-8409e10f4018/f6_desktop_gameplay_showcase.png)) |
+| **Ciclo das 20 Fases (`1-1..4-5 → 1-1`)** | Início `151 / 54 / 48` → Fim `151 / 54 / 48` (**`Δgeo = 0`, `Δtex = 0`, `Δprog = 0`, `lights = [5]`**) |
+| **Mobile Portrait (`390×844`, `vite preview`)** | `docOverflowX = 0`, auto-detectado `medium` (`MSAA 2x`, `effectiveDpr = 1.25`), topbar sem cortes ([f6_mobile_final.png](file:///C:/Users/Usu/.gemini/antigravity/brain/0524a177-dfd5-45e2-a2ed-8409e10f4018/f6_mobile_final.png)) |
+| **Saúde Console (Dev + Prod + Mobile)** | **`0` console errors**, **`0` console warnings**, **`0` pageErrors** |
+| **Suítes Automatizadas (`8` arquivos `tests/*.test.mjs`)** | **`39 / 39 PASS`** (`balance`, `expansion`, `multiplayer`, `visual-foundation`, `visual-polish`, `visual-slice`, `visual-towers23`, `visual-biomes`) |
+| **Arquivos Pré-Existentes Preservados** | `src/three/Effects3D.ts`, `README.md`, `docs/designs/ARCHITECTURE.md` e `package.json` preservados intactos; nenhum `git push` realizado |
+
 
